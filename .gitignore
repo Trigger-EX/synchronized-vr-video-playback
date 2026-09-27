@@ -1,0 +1,32 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.venv/
+venv/
+build/
+dist/
+
+# Server runtime folders
+server/content/
+server/data/
+
+# Unity
+headset/[Ll]ibrary/
+headset/[Tt]emp/
+headset/[Oo]bj/
+headset/[Bb]uild/
+headset/[Bb]uilds/
+headset/[Ll]ogs/
+headset/[Uu]ser[Ss]ettings/
+headset/*.csproj
+headset/*.sln
+headset/*.apk
+*.apk
+
+# OS/editor
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
