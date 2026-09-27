@@ -53,7 +53,7 @@ class Device:
 
     def saved(self) -> dict:
         return {"name": self.name, "group": self.group, "volume": self.volume, "serial": self.serial,
-                "model": self.model}
+                "model": self.model, "last_seen": self.last_seen}
 
     def to_json(self) -> dict:
         return {
@@ -191,6 +191,7 @@ class Controller:
             for key in ("name", "group", "serial", "model"):
                 setattr(dev, key, str(saved.get(key, "")))
             dev.volume = float(saved.get("volume", 1.0))
+            dev.last_seen = float(saved.get("last_seen", 0.0))
             self.devices[device_id] = dev
         self.library.metadata.update(data.get("videos", {}))
         if "max_downloads" in data:
@@ -274,6 +275,7 @@ class Controller:
             return  # superseded by a newer connection
         dev.conn = None
         dev.online = False
+        self.dirty = True  # remember when it was last seen
         self.distributor.disconnected(dev.device_id)
         self.log_event("warn", f"{dev.label} disconnected", dev)
 
@@ -290,7 +292,8 @@ class Controller:
             dev.inventory = {str(f["name"]): int(f.get("size", 0)) for f in files if isinstance(f, dict) and "name" in f}
             self.changed()
         elif kind == "downloads_finished":
-            self.distributor.finished(dev.device_id, msg)
+            if not msg.get("cancelled"):  # a cancelled job's slot was already freed
+                self.distributor.finished(dev.device_id, msg)
         elif kind == "event":
             level = msg.get("level", "info")
             self.log_event(level if level in ("info", "warn", "error") else "info",

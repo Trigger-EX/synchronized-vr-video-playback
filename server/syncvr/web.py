@@ -99,12 +99,16 @@ class WebApp:
             async for msg in ws:
                 if msg.type != WSMsgType.TEXT:
                     continue
+                req_id = None
                 try:
                     req = json.loads(msg.data)
+                    if not isinstance(req, dict):
+                        raise CommandError("expected a JSON object")
+                    req_id = req.get("id")
                     result = self.controller.execute(req.get("action", ""), req)
-                    reply = {"type": "result", "id": req.get("id"), "ok": True, "result": result}
-                except (CommandError, ValueError, TypeError, AttributeError) as exc:
-                    reply = {"type": "result", "id": None, "ok": False, "error": str(exc)}
+                    reply = {"type": "result", "id": req_id, "ok": True, "result": result}
+                except (CommandError, ValueError, TypeError, KeyError) as exc:
+                    reply = {"type": "result", "id": req_id, "ok": False, "error": str(exc)}
                 await ws.send_str(json.dumps(reply))
         finally:
             self.sockets.discard(ws)
@@ -126,7 +130,7 @@ class WebApp:
         try:
             body = await self._body(request)
             result = self.controller.execute(body.get("action", ""), body)
-        except CommandError as exc:
+        except (CommandError, ValueError, TypeError, KeyError) as exc:
             return _json_error(400, str(exc))
         return web.json_response({"ok": True, "result": result})
 

@@ -1,1 +1,140 @@
-<!doctype html><title>SyncVR</title>
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="theme-color" content="#111418">
+<title>SyncVR Operator</title>
+<link rel="stylesheet" href="/static/app.css">
+</head>
+<body>
+<header class="topbar">
+  <div class="brand">SyncVR <span id="server-name" class="muted"></span></div>
+  <div id="stats" class="stats"></div>
+  <div id="conn" class="conn bad">connecting…</div>
+</header>
+
+<div class="layout">
+  <main>
+    <nav class="tabs" role="tablist">
+      <button role="tab" data-tab="headsets" class="active">Headsets</button>
+      <button role="tab" data-tab="library">Library</button>
+      <button role="tab" data-tab="settings">Settings</button>
+      <button role="tab" data-tab="log">Log</button>
+    </nav>
+
+    <section id="tab-headsets" class="tab active">
+      <div class="toolbar">
+        <button id="sel-all">Select all</button>
+        <button id="sel-none">Clear selection</button>
+        <select id="group-filter" aria-label="Filter by group"><option value="">All groups</option></select>
+        <label class="check"><input type="checkbox" id="show-offline" checked> Show offline</label>
+        <span class="spacer"></span>
+        <span id="dl-summary" class="muted"></span>
+      </div>
+      <div id="grid" class="grid"></div>
+      <p id="grid-empty" class="empty" hidden>
+        No headsets yet. Start the SyncVR player app on a headset connected to the same network,
+        or run <code>python -m syncvr sim</code> to try the dashboard with simulated headsets.
+      </p>
+    </section>
+
+    <section id="tab-library" class="tab">
+      <div class="toolbar">
+        <button id="rescan">Rescan content folder</button>
+        <span class="muted">Put video files in the server's content folder. Changes here apply the next time a video is loaded.</span>
+      </div>
+      <div class="table-wrap">
+        <table class="library">
+          <thead><tr>
+            <th>Title</th><th>File</th><th>Length</th><th>Size</th><th>Projection</th><th>Stereo</th>
+            <th>Yaw°</th><th>Loop</th><th>On headsets</th>
+          </tr></thead>
+          <tbody id="library-body"></tbody>
+        </table>
+      </div>
+      <p id="library-empty" class="empty" hidden>The content folder is empty.</p>
+    </section>
+
+    <section id="tab-settings" class="tab">
+      <form id="settings-form" class="settings"></form>
+    </section>
+
+    <section id="tab-log" class="tab">
+      <ol id="log" class="log"></ol>
+    </section>
+  </main>
+
+  <aside class="panel">
+    <div id="target-label" class="target">Controlling all headsets</div>
+
+    <label class="field">Video
+      <select id="video-select"></select>
+    </label>
+
+    <div id="now-playing" class="now muted">Nothing loaded</div>
+    <input type="range" id="seek" min="0" max="1000" step="1" value="0" aria-label="Seek">
+    <div class="times"><span id="t-pos">0:00</span><span id="t-dur">0:00</span></div>
+
+    <div class="transport">
+      <button id="btn-load" title="Load the video and hold on the first frame">Load</button>
+      <button id="btn-play" class="primary" title="Play in sync (resumes or joins a running show)">Play</button>
+      <button id="btn-pause">Pause</button>
+      <button id="btn-stop">Stop</button>
+    </div>
+    <div class="transport">
+      <button data-delta="-30">−30s</button>
+      <button data-delta="-10">−10s</button>
+      <button data-delta="10">+10s</button>
+      <button data-delta="30">+30s</button>
+    </div>
+    <div class="row">
+      <button id="btn-restart">Play from start</button>
+      <button id="btn-resync" title="Re-send the current playback state">Resync</button>
+    </div>
+
+    <label class="field"><span>Volume <span id="volume-value"></span></span>
+      <input type="range" id="volume" min="0" max="100" value="100">
+    </label>
+
+    <div class="row">
+      <button id="btn-recenter">Recenter view</button>
+      <button id="btn-identify" title="Shows the headset's name in the headset and beeps">Identify</button>
+    </div>
+    <div class="row">
+      <input id="msg-text" placeholder="Message to show in headsets" maxlength="500">
+      <button id="btn-msg">Send</button>
+    </div>
+
+    <h3>Content</h3>
+    <div class="row">
+      <button id="btn-push" title="Download the chosen video to the targeted headsets">Push video</button>
+      <button id="btn-push-all">Push all videos</button>
+    </div>
+    <div class="row">
+      <button id="btn-cancel-dl">Stop downloads</button>
+      <button id="btn-delete" class="danger">Remove video</button>
+    </div>
+  </aside>
+</div>
+
+<dialog id="edit-dialog">
+  <form method="dialog" class="edit-form">
+    <h3>Headset</h3>
+    <p id="edit-id" class="muted mono"></p>
+    <label class="field">Name <input id="edit-name" maxlength="64" placeholder="e.g. Seat 12"></label>
+    <label class="field">Group <input id="edit-group" maxlength="64" placeholder="e.g. Room A" list="group-list"></label>
+    <datalist id="group-list"></datalist>
+    <div class="row">
+      <button value="save" class="primary">Save</button>
+      <button value="cancel">Cancel</button>
+      <span class="spacer"></span>
+      <button value="forget" id="edit-forget" class="danger">Forget</button>
+    </div>
+  </form>
+</dialog>
+
+<div id="toast" class="toast" role="status" aria-live="polite"></div>
+<script src="/static/app.js"></script>
+</body>
+</html>

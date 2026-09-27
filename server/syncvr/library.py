@@ -39,7 +39,7 @@ class Video:
             "projection": self.projection,
             "stereo": self.stereo,
             "rotation": self.rotation,
-            "duration": self.duration,
+            "duration": self.duration or 0.0,
         }
 
 

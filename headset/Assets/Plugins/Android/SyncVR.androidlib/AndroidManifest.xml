@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Merged into the app manifest by Unity's Gradle build. -->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+          package="com.syncvr.player.androidlib">
+  <!-- Wi-Fi locks: keep the radio out of power-save (latency) and let UDP discovery broadcasts in. -->
+  <uses-permission android:name="android.permission.ACCESS_WIFI_STATE" />
+  <uses-permission android:name="android.permission.CHANGE_WIFI_MULTICAST_STATE" />
+  <uses-permission android:name="android.permission.WAKE_LOCK" />
+  <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+  <!-- Content is served over plain HTTP on the local network. -->
+  <application android:usesCleartextTraffic="true" />
+</manifest>

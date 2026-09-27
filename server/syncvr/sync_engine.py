@@ -37,7 +37,9 @@ RATE_RELEASE = 0.2
 LATE_START_TOLERANCE_S = 0.05
 # Rate mode watchdog: if the video does not advance for this long while the
 # rate is not 1.0, assume the player cannot change speed and fall back to seeks.
-STALL_TIMEOUT_S = 0.6
+# Must stay well below the time drift needs to reach hard_seek_ms, or a re-cue
+# (which resets the speed) would hide the stall.
+STALL_TIMEOUT_S = 0.25
 
 
 class ClockSync:
@@ -76,9 +78,10 @@ class SyncEngine:
     """Drives a player object so it tracks the server's anchors.
 
     The player must provide: ``loaded_video`` (str or None), ``is_prepared``,
-    ``is_seeking``, ``is_playing``, ``time``, ``length``, ``can_set_rate``,
-    ``load(video_msg)``, ``play()``, ``pause()``, ``stop()``, ``seek(t)``,
-    ``set_rate(r)``, and optionally ``set_external_time(t)``.
+    ``is_seeking``, ``is_playing``, ``error``, ``time``, ``length``,
+    ``can_set_rate``, ``load(video_msg)``, ``play()``, ``pause()``, ``stop()``,
+    ``seek(t)``, ``set_rate(r)``, ``set_loop(b)``, ``set_external_time(t)`` and
+    ``clear_external_time()``.
     """
 
     def __init__(self, player, emit_event: Callable[[str, str], None] = lambda level, msg: None):
@@ -143,6 +146,12 @@ class SyncEngine:
         self.settings.update(settings)
         self.forced_mode = None
 
+    def resync(self) -> None:
+        """Re-cue the current anchor, e.g. after the app was suspended."""
+        if self.anchor is not None and self.state in ("playing", "ready"):
+            self.pending_start = True
+            self.cue_at = None
+
     # ------------------------------------------------------------- update
 
     def expected_position(self, now: float) -> Optional[float]:
@@ -186,10 +195,10 @@ class SyncEngine:
     def update(self, now: float) -> None:
         """Call once per rendered frame with the current *server* time."""
         self._track_seek(now)
+        if getattr(self.player, "error", None):
+            self.state = "error"
+            return
         if self.state == "loading":
-            if getattr(self.player, "error", None):
-                self.state = "error"
-                return
             if not self.player.is_prepared:
                 return
             self.state = "paused"
@@ -223,6 +232,7 @@ class SyncEngine:
                 at = now + self.cue_margin()  # late: pick a reachable point further on
             self.cue_at = at
             self._set_rate(1.0)
+            self.player.set_loop(bool(self.anchor.get("loop")))
             self.player.pause()
             self._seek(now, self._wrap(self.expected_position(at)))
             if self.state != "playing":
@@ -289,8 +299,10 @@ class SyncEngine:
                 self._set_rate(1.0 - adjust)
             elif abs(drift) < deadband * RATE_RELEASE:
                 self._set_rate(1.0)
-        elif mode == "external" and hasattr(self.player, "set_external_time"):
+        if mode == "external":
             self.player.set_external_time(expected)
+        else:
+            self.player.clear_external_time()
 
     def _stalled(self, now: float, actual: float) -> bool:
         """Detect players that freeze when their speed is changed."""

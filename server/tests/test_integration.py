@@ -206,6 +206,10 @@ async def test_dashboard_api(server, fleet):
             assert r.status == 400
         async with s.post(f"{base}/api/command", json={"action": "play", "video": "missing.mp4"}) as r:
             assert r.status == 400
+        for bad in ({"action": "seek", "pos": "soon"}, {"action": "play", "targets": [{"x": 1}]},
+                    {"action": "volume"}, {"action": "play", "targets": 42}):
+            async with s.post(f"{base}/api/command", json=bad) as r:
+                assert r.status == 400, bad
 
         async with s.post(f"{base}/api/library/trailer_flat.mp4", json={"rotation": 90}) as r:
             assert r.status == 200

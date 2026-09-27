@@ -155,6 +155,15 @@ class SimPlayer:
         self._advance()
         self._rate = rate
 
+    def set_loop(self, loop):
+        self.loop = loop
+
+    def set_external_time(self, t):
+        pass  # the simulator has no player-side clock slaving
+
+    def clear_external_time(self):
+        pass
+
 
 class LocalClock:
     """A headset's monotonic clock: arbitrary origin and slightly wrong speed."""
