@@ -6,7 +6,6 @@ build-backend = "setuptools.build_meta"
 name = "syncvr"
 version = "0.1.0"
 description = "Synchronized video playback and fleet control for standalone VR headsets"
-readme = "../README.md"
 requires-python = ">=3.8"
 dependencies = ["aiohttp>=3.8"]
 
