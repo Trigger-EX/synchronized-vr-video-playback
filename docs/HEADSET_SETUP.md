@@ -19,7 +19,7 @@ its whole scene at runtime, so the project is mostly scripts:
 
 ## Building the APK
 
-1. Install **Unity 2019.4 LTS** (2019.4.40f1 is the last release) with **Android Build
+1. Install **Unity 2019.4 LTS** (use 2019.4.41f2, the security-patched release) with **Android Build
    Support** (including the Android SDK/NDK and OpenJDK options) from Unity Hub's archive.
    Newer Unity versions dropped Oculus Go support.
 2. Open the `headset/` folder as a project in Unity Hub.
