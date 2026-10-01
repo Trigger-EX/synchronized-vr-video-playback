@@ -145,5 +145,5 @@ headset/                Unity 2019.4 project (Oculus Go)
   Assets/SyncVR/Scripts runtime: networking, sync engine, player, UI
   Assets/SyncVR/Editor  one-click configure + build
   Tests~/               sync engine tests runnable with Mono
-docs/                   protocol, headset setup guide, improvement plan
+docs/                   protocol, headset setup guide, improvement and execution plans
 ```
