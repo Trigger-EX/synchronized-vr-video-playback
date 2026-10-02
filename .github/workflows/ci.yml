@@ -31,3 +31,49 @@ jobs:
           mcs -out:enginetests.exe "Tests~/EngineTests.cs"
           Assets/SyncVR/Scripts/SyncEngine.cs Assets/SyncVR/Scripts/Messages.cs Assets/SyncVR/Scripts/ClockSync.cs
       - run: mono enginetests.exe
+
+  player-android:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: player-android
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+      - uses: gradle/actions/setup-gradle@v4
+      - name: Core unit tests
+        run: ./gradlew --no-daemon :core:test
+      - name: Check signing secrets
+        env:
+          SYNCVR_KEYSTORE_BASE64: ${{ secrets.SYNCVR_KEYSTORE_BASE64 }}
+          SYNCVR_KEYSTORE_PASSWORD: ${{ secrets.SYNCVR_KEYSTORE_PASSWORD }}
+          SYNCVR_KEY_ALIAS: ${{ secrets.SYNCVR_KEY_ALIAS }}
+          SYNCVR_KEY_PASSWORD: ${{ secrets.SYNCVR_KEY_PASSWORD }}
+        run: |
+          missing=""
+          for name in SYNCVR_KEYSTORE_BASE64 SYNCVR_KEYSTORE_PASSWORD SYNCVR_KEY_ALIAS SYNCVR_KEY_PASSWORD; do
+            if [ -z "${!name}" ]; then missing="$missing $name"; fi
+          done
+          if [ -n "$missing" ]; then
+            echo "::error::Missing GitHub Actions secrets:$missing. Add them under Settings > Secrets and variables > Actions; the APK cannot be signed without them."
+            exit 1
+          fi
+          echo "$SYNCVR_KEYSTORE_BASE64" | base64 -d > "$RUNNER_TEMP/syncvr.jks"
+      - name: Build signed APK
+        env:
+          SYNCVR_KEYSTORE_FILE: ${{ runner.temp }}/syncvr.jks
+          SYNCVR_KEYSTORE_PASSWORD: ${{ secrets.SYNCVR_KEYSTORE_PASSWORD }}
+          SYNCVR_KEY_ALIAS: ${{ secrets.SYNCVR_KEY_ALIAS }}
+          SYNCVR_KEY_PASSWORD: ${{ secrets.SYNCVR_KEY_PASSWORD }}
+        run: |
+          ./gradlew --no-daemon :app:assembleRelease
+          cp app/build/outputs/apk/release/app-release.apk SyncVRPlayer.apk
+          "$(ls -d "$ANDROID_HOME"/build-tools/* | sort -V | tail -1)/apksigner" verify --print-certs SyncVRPlayer.apk
+      - uses: actions/upload-artifact@v4
+        with:
+          name: SyncVRPlayer
+          path: player-android/SyncVRPlayer.apk
+          if-no-files-found: error
