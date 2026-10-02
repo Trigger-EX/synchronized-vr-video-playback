@@ -96,6 +96,16 @@ Things I couldn't verify without a headset:
 
 If the app shows nothing at all, send the log anyway; it says which step failed.
 
+Known suspects, so you know what to look for:
+
+* **Panel not visible:** its placement is a guess. Look down, up and behind you; it may also
+  be upside down.
+* **Stereo eyes swapped** in mode 4: depth looks inside-out. Just note it.
+* **Black video in modes 1, 3 or 4:** look for `ExoPlayer error` or `No video in` in the log.
+* **Black in mode 2 only:** look for `updateTexImage` or `Sphere` errors in the log.
+* **`vrapi_EnterVrMode failed` repeating**, or `Render thread still in VR mode` after taking
+  the headset off: note when it happened.
+
 ## Building the APK (Unity app)
 
 This section and the ones after it are about the Unity app, which stays as a fallback until the
