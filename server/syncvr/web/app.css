@@ -146,6 +146,16 @@ table.library { border-collapse: collapse; width: 100%; font-size: 14px; }
 .library th { text-align: left; font-weight: 600; color: var(--muted); font-size: 12px; text-transform: uppercase; letter-spacing: .04em; padding: 6px 8px; border-bottom: 1px solid var(--border); white-space: nowrap; }
 .library td { padding: 6px 8px; border-bottom: 1px solid var(--border); vertical-align: middle; white-space: nowrap; }
 .library td.file { color: var(--muted); max-width: 240px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.library td.checks { white-space: normal; min-width: 130px; }
+.library summary { cursor: pointer; list-style: none; }
+.library summary::-webkit-details-marker { display: none; }
+.library details[open] summary { margin-bottom: 4px; }
+.issues { margin: 0; padding: 0; list-style: none; font-size: 13px; max-width: 320px; }
+.issues li { padding: 2px 0; }
+.chip.lvl-ok, .issues .lvl-ok { color: var(--ok); }
+.chip.lvl-warn, .issues .lvl-warn { color: var(--warn); }
+.chip.lvl-error, .issues .lvl-error { color: var(--bad); }
+.chip.lvl-info, .issues .lvl-info { color: var(--muted); }
 .library input[type=number] { width: 80px; }
 .library input.title { width: 100%; min-width: 190px; }
 
