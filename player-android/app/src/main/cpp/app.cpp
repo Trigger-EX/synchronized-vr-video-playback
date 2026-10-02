@@ -439,7 +439,10 @@ void App::NotifySurfacesReady(JNIEnv* env) {
 
 bool App::EnterVr(ANativeWindow* window) {
     ovrModeParms modeParms = vrapi_DefaultModeParms(&java_);
-    modeParms.Flags |= VRAPI_MODE_FLAG_RESET_WINDOW_FULLSCREEN;
+    // As in VrCubeWorld_SurfaceView: no window reset from the render thread (the theme is
+    // already fullscreen) so VrApi does not trigger window/lifecycle churn while the main
+    // thread is blocked in onPause/surfaceDestroyed.
+    modeParms.Flags &= ~VRAPI_MODE_FLAG_RESET_WINDOW_FULLSCREEN;
     modeParms.Flags |= VRAPI_MODE_FLAG_NATIVE_WINDOW;
     modeParms.Display = reinterpret_cast<size_t>(display_);
     modeParms.WindowSurface = reinterpret_cast<size_t>(window);
