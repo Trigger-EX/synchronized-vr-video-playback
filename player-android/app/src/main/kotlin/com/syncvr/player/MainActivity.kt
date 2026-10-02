@@ -11,6 +11,7 @@ class MainActivity : Activity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         Log.i(TAG, "SyncVR player ${BuildConfig.VERSION_NAME} (${PlayerInfo.PLAYER}), videos: ${PlayerInfo.VIDEO_DIR}")
+        Log.i(TAG, "VrApi ${NativeBridge.vrApiVersion()}")
         setContentView(TextView(this).apply { text = "SyncVR Player ${BuildConfig.VERSION_NAME}" })
     }
 

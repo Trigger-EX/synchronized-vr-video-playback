@@ -24,6 +24,11 @@ android {
 
     buildFeatures { buildConfig = true }
 
+    // C++ VR loop; needs the VrApi SDK from tools/fetch-vrapi.sh.
+    externalNativeBuild {
+        cmake { path = file("src/main/cpp/CMakeLists.txt") }
+    }
+
     signingConfigs {
         if (keystoreFile != null) {
             create("release") {

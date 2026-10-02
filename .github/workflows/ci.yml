@@ -60,6 +60,8 @@ jobs:
             echo "::error title=Missing signing secrets::Add these repository secrets under Settings > Secrets and variables > Actions:$missing"
             exit 1
           fi
+      - name: Fetch VrApi SDK
+        run: ./tools/fetch-vrapi.sh
       - name: Build signed APK
         run: |
           export SYNCVR_KEYSTORE_FILE="$RUNNER_TEMP/syncvr.jks"
