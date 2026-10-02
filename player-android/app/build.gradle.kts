@@ -47,6 +47,9 @@ android {
         }
     }
 
+    // Release lint needs network access for its own tooling; CI builds the APK only.
+    lint { checkReleaseBuilds = false }
+
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
@@ -59,4 +62,5 @@ kotlin {
 
 dependencies {
     implementation(project(":core"))
+    implementation("androidx.media3:media3-exoplayer:1.4.1")
 }
