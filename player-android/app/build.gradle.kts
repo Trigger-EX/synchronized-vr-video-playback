@@ -22,6 +22,8 @@ android {
         ndk { abiFilters += "armeabi-v7a" }
     }
 
+    buildFeatures { buildConfig = true }
+
     signingConfigs {
         if (keystoreFile != null) {
             create("release") {
