@@ -30,3 +30,7 @@ headset/*.apk
 Thumbs.db
 .idea/
 .vscode/
+
+# Claude Code agent logs
+build.log
+test.log
