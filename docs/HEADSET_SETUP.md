@@ -17,7 +17,90 @@ its whole scene at runtime, so the project is mostly scripts:
 | `HeadsetConfig.cs` | Optional `config.json` (fixed server address, discovery filters). |
 | `Editor/SyncVRBuild.cs` | Menu items to configure the project for Oculus Go and build the APK. |
 
-## Building the APK
+## Native player: Checkpoint 1 (hardware check)
+
+A native Oculus Go player (Kotlin + C++ VrApi 1.36, in [`player-android/`](../player-android))
+is replacing the Unity app. It uses the same package name (`com.syncvr.player`) and video folder,
+so it **replaces** the Unity app on a headset. This first build is a diagnostic skeleton: it
+doesn't connect to the server yet. It plays one video and cycles through four ways of showing
+it, so we can find out which display path works on the Go. That takes about 15 minutes with
+one headset.
+
+### 1. Get the APK
+
+1. Open the repository on GitHub → **Actions** → the latest green **CI** run on the branch.
+2. Under **Artifacts**, download **SyncVRPlayer-apk**. It's a zip; unzip it to get
+   `SyncVRPlayer.apk`.
+
+CI signs the APK with the key stored in the repository secrets, so later builds install over
+this one.
+
+### 2. Install and copy a video
+
+With the headset plugged in over USB (developer mode on, USB debugging allowed):
+
+```bash
+syncvr adb setup SyncVRPlayer.apk        # installs, disables the proximity sensor, launches
+syncvr adb push my_360_video.mp4         # any 360° equirectangular video
+syncvr adb launch                        # restart so it picks up the video
+```
+
+The player plays the **first video, alphabetically**, in
+`/sdcard/Android/data/com.syncvr.player/files/videos/` (`.mp4`, `.mkv`, `.webm`, `.mov`).
+A mono 360° video is the most useful. If you also have a top/bottom 3D 360° video, test it as
+a second run (rename it so it sorts first, or push it alone).
+
+### 3. Watch the four modes
+
+Put the headset on. Every **15 seconds** it switches to the next mode and loops. A small text
+panel in front of you names the current mode (for example "1/4 Equirect layer (mono)"):
+
+| # | Panel label | What you should see if it works |
+|---|---|---|
+| 1 | Equirect layer (mono) | The 360° video all around you, sharp, not mirrored, horizon level. |
+| 2 | Sphere fallback (app-rendered) | The same 360° view, drawn by the app instead of the compositor. Compare sharpness and smoothness with mode 1. |
+| 3 | Cylinder layer (flat screen) | The video as a flat, slightly curved screen in front of you. |
+| 4 | Equirect layer (stereo top/bottom) | With a 3D top/bottom video: depth, each eye seeing its own half. With a mono video, the image looks squashed vertically, which is expected. |
+
+For each mode, note:
+
+* Is the picture there at all (or black, frozen, flickering)?
+* Is it upside down, mirrored, or rotated (where is the "front" of the video)?
+* Is it smooth when you turn your head, or does it judder or tear?
+* Is the text panel readable, and where is it (too close, too far, off to one side)?
+* Is there sound?
+
+### 4. Send me the log
+
+Leave it running through at least two full cycles (about 2 minutes), then:
+
+```bash
+adb logcat -d -s SyncVR > syncvr-checkpoint1.txt
+```
+
+Send that file along with your notes per mode. The log has the VrApi and system versions,
+the H.264/HEVC decoder size limits, supported refresh rates, and any errors.
+
+### What this checkpoint settles
+
+Things I couldn't verify without a headset:
+
+* **Main display path:** compositor equirect layer (mode 1) or app-drawn sphere (mode 2).
+  Whichever looks better becomes the main path in phase 1B.
+* **Orientation:** texture origin and which half is the left eye in stereo (mode 4).
+* **Cylinder size and placement** (mode 3), and the text panel's distance and size.
+* **Decoder limits:** the largest H.264/HEVC sizes the Go accepts. These replace the
+  conservative defaults in the Library tab's checks.
+* **Pausing:** take the headset off, wait for it to sleep, put it back on. Does the video come
+  back (it may restart from the beginning)? Also try the Oculus button, then return to the app.
+
+If the app shows nothing at all, send the log anyway; it says which step failed.
+
+## Building the APK (Unity app)
+
+This section and the ones after it are about the Unity app, which stays as a fallback until the
+native player has proven itself.
+
 
 1. Install **Unity 2019.4 LTS** (use 2019.4.41f2, the security-patched release) with **Android Build
    Support** (including the Android SDK/NDK and OpenJDK options) from Unity Hub's archive.
