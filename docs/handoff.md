@@ -1,24 +1,25 @@
 # Handoff
 
 ## Goal
-Replace the Unity headset app with a native Android player for Oculus Go (Kotlin + C++ VrApi + Media3 ExoPlayer), then the server and fleet phases, as laid out in docs/EXECUTION_PLAN.md.
+Replace the Unity headset app with a native Oculus Go player, following docs/EXECUTION_PLAN.md
+(order: 1A → 3.1 → 1B → 2 → 3.2 → 4 → 5).
 
 ## Decisions and constraints
-- Follow docs/EXECUTION_PLAN.md in order: 1A skeleton → 3.1 content checks → 1B full player → 2 → 3.2 → 4 → 5. Phase 0 (Unity testing) skipped by the user.
-- Native app lives in `player-android/` (modules `core` = plain Kotlin, `app` = Android). Package `com.syncvr.player` (replaces the Unity app; same video folder `/sdcard/Android/data/com.syncvr.player/files/videos/`). Min API 25, ARMv7.
-- Oculus Mobile SDK 19.0 (VrApi 1.36), last with Go support; fetched in CI from a public mirror pinned by commit + checksum, never committed.
-- APK is built only in GitHub Actions (this container can't reach dl.google.com; maven.google.com and Maven Central work, so `core` JVM tests run locally).
-- Signing: user is adding GitHub secrets `SYNCVR_KEYSTORE_BASE64`, `SYNCVR_KEYSTORE_PASSWORD`, `SYNCVR_KEY_ALIAS`, `SYNCVR_KEY_PASSWORD`. CI must fail clearly if any is missing.
-- Protocol stays as docs/PROTOCOL.md; `hello` gains `player: "native"`.
+- Branch `code/nice-clarke-o9fuha` (the old `claude/adoring-curie-qnd0ib` named in EXECUTION_PLAN is obsolete). No PR yet.
+- `player-android/`: Kotlin + C++ VrApi 1.36 (Oculus Mobile SDK 19.0), package `com.syncvr.player`, minSdk 25, compile/target 34, armeabi-v7a, AGP 8.7.3, Kotlin 2.0.21, Gradle 8.14.3, Media3 1.4.1.
+- The SDK is fetched by `player-android/tools/fetch-vrapi.sh` (lovr-org/ovr_sdk_mobile @447c814, per-file SHA-256) into git-ignored `third_party/`.
+- Signing uses only the GitHub secrets SYNCVR_KEYSTORE_BASE64/_PASSWORD, SYNCVR_KEY_ALIAS, SYNCVR_KEY_PASSWORD. Never commit a keystore.
+- dl.google.com is blocked locally, so only `:core` builds here (ANDROID_HOME unset). The APK is built only in CI (job `player-android`, artifact `SyncVRPlayer-apk`).
 
 ## Current state
-- Branch `claude/adoring-curie-qnd0ib` (also the repo's only/default branch on GitHub, so no PR can be opened yet).
-- Server, dashboard, sim, adb tool, Unity app, CI (`.github/workflows/ci.yml`) done; 42 pytest + C# engine tests green.
-- Reference sync engine: `server/syncvr/sync_engine.py`; scenario tests: `server/tests/test_sync_engine.py`, `headset/Tests~/EngineTests.cs`.
+- Phase 1A is done (all steps in docs/plan.md ✅). CI is green on c389060: server, headset-engine and player-android all pass.
+- The diagnostic APK cycles 4 modes every 15 s: equirect mono, sphere fallback, cylinder, stereo TB. Logs use tag `SyncVR`.
+- Phase 3.1 is done: ffprobe checks, SHA-256 in `sync_content`, Library "Checks" column. Code is in server/syncvr/analysis.py, limits.py and mp4.py.
+- docs/HEADSET_SETUP.md has the Checkpoint 1 guide.
+- Uncertain on hardware (marked "HW CHECK" in cpp/layers.cpp): panel/cylinder placement, texture origin, stereo eye order, pause blocking up to 3 s.
 
 ## Open questions
-- Whether the Go's firmware supports VRAPI_LAYER_TYPE_EQUIRECT2 (answered at checkpoint 1; fallback = app-drawn sphere sampling the external OES texture).
-- Which public mirror/commit holds SDK 19.0 exactly (lovr-org/ovr_sdk_mobile master is SDK 25 / VrApi 1.42 — too new).
+- Checkpoint 1 results: which display path to use, orientation fixes, decoder limits for `GoLimits`.
 
 ## Next step
-Start Phase 1A, step 1: write numbered steps to docs/plan.md, then create the `player-android/` Gradle project skeleton and a CI job that builds a signed APK.
+If the user sent Checkpoint 1 results, apply them first: pick the display path, fix orientation and placement, and update limits.py. Otherwise start Phase 1B step 1, which doesn't depend on them: write docs/plan.md for 1B, then port clock sync, the sync engine and the protocol to `player-android/core`, with the shared scenario tests.
