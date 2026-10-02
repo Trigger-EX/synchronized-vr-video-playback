@@ -177,4 +177,8 @@ class WebApp:
         if path is None or not path.is_file():
             raise web.HTTPNotFound()
         # FileResponse implements Range requests, which headsets use to resume.
-        return web.FileResponse(path, chunk_size=256 * 1024)
+        response = web.FileResponse(path, chunk_size=256 * 1024)
+        sha256 = self.controller.library.sha256_of(request.match_info["name"])
+        if sha256:
+            response.headers["X-Content-SHA256"] = sha256
+        return response

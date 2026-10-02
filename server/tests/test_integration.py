@@ -292,3 +292,29 @@ async def test_many_headsets(server, fleet):
     errs = errors_ms(headsets)
     assert len(errs) == 40
     assert statistics.median(errs) < 15 and max(errs) < 40, sorted(errs)[-5:]
+
+
+async def test_headsets_verify_checksums(server, fleet):
+    await asyncio.get_running_loop().run_in_executor(None, server.analyzer.wait, 20)
+    lib = server.library
+    name = "trailer_flat.mp4"
+    digest = lib.sha256_of(name)
+    assert digest
+    async with aiohttp.ClientSession() as s:
+        async with s.get(f"http://127.0.0.1:{server.http_port}/content/{name}") as r:
+            assert r.status == 200 and r.headers["X-Content-SHA256"] == digest
+        async with s.get(f"http://127.0.0.1:{server.http_port}/api/state") as r:
+            entry = next(v for v in (await r.json())["library"] if v["name"] == name)
+            assert entry["sha256"] == digest and "issues" in entry
+
+    good, bad = await fleet(2)
+    await api(server, "sync_content", videos=[name], targets=[good.device_id])
+    await wait_for(lambda: (good.download_dir / name).exists())
+
+    # A server-side hash that does not match what is served makes the headset reject the file.
+    server.analyzer._files[name]["sha256"] = "0" * 64
+    assert lib.sha256_of(name) == "0" * 64
+    await api(server, "sync_content", videos=[name], targets=[bad.device_id])
+    await wait_for(lambda: not server.controller.distributor.active, timeout=15)
+    assert not (bad.download_dir / name).exists()
+    assert name not in server.controller.devices[bad.device_id].inventory

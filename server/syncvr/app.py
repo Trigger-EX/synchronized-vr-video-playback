@@ -9,6 +9,7 @@ from typing import List, Optional
 from aiohttp import web
 
 from . import __version__
+from .analysis import CACHE_FILE, ContentAnalyzer
 from .controller import Controller
 from .discovery import DiscoveryBeacon, default_broadcast_addresses, local_ipv4_addresses
 from .headset_server import HeadsetServer
@@ -43,7 +44,11 @@ class SyncServer:
     def __init__(self, config: ServerConfig):
         self.config = config
         self.store = StateStore(Path(config.data_dir) / "state.json")
-        self.library = Library(Path(config.content_dir))
+        self.analyzer = ContentAnalyzer(Path(config.data_dir) / CACHE_FILE)
+        if not self.analyzer.available:
+            log.warning("ffprobe not found: videos will not be checked against the Go's limits "
+                        "(install ffmpeg to enable). Checksums still work.")
+        self.library = Library(Path(config.content_dir), analyzer=self.analyzer)
         self.controller = Controller(self.library, server_name=config.name)
         self.controller.load(self.store.load())
         if config.max_downloads is not None:
@@ -75,6 +80,8 @@ class SyncServer:
         }
 
     async def start(self) -> None:
+        loop = asyncio.get_running_loop()
+        self.analyzer.on_update = lambda: loop.call_soon_threadsafe(self.controller.changed)
         await self.headsets.start()
         self._runner = web.AppRunner(self.web.app, access_log=None)
         await self._runner.setup()
@@ -101,11 +108,13 @@ class SyncServer:
     async def stop(self) -> None:
         for task in self._tasks:
             task.cancel()
+        self.analyzer.on_update = None
         if self.beacon:
             await self.beacon.stop()
         await self.headsets.stop()
         if self._runner:
             await self._runner.cleanup()
+        self.analyzer.close()
         self._save()
 
     def _save(self) -> None:
