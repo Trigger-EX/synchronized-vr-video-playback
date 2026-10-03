@@ -15,7 +15,7 @@ Replace the Unity headset app with a native Oculus Go player, following docs/EXE
 - Phase 1A is done (all steps in docs/plan.md ✅). CI is green on c389060: server, headset-engine and player-android all pass.
 - The diagnostic APK cycles 4 modes every 15 s: equirect mono, sphere fallback, cylinder, stereo TB. Logs use tag `SyncVR`.
 - Phase 3.1 is done: ffprobe checks, SHA-256 in `sync_content`, Library "Checks" column. Code is in server/syncvr/analysis.py, limits.py and mp4.py.
-- docs/HEADSET_SETUP.md has the Checkpoint 1 guide.
+- docs/HEADSET_SETUP.md is native-first and has the Checkpoint 1 guide; Unity steps moved to docs/UNITY_PLAYER.md. CLAUDE.md still names the Unity build command; the user owns that file.
 - Uncertain on hardware (marked "HW CHECK" in cpp/layers.cpp): panel/cylinder placement, texture origin, stereo eye order, pause blocking up to 3 s.
 
 ## Open questions
