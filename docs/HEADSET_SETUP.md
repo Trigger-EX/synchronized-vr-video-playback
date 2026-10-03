@@ -1,48 +1,73 @@
 # Headset setup (Oculus Go)
 
-The headset app is a Unity 2019.4 LTS project in [`headset/`](../headset). It builds
-its whole scene at runtime, so the project is mostly scripts:
+The headset app is the native player in [`player-android/`](../player-android): Kotlin and C++
+on Oculus VrApi 1.36, with ExoPlayer for video. Its package name is `com.syncvr.player`, so it
+replaces the old Unity app on a headset and uses the same video folder.
 
-| Script | Role |
-|---|---|
-| `SyncVRApp.cs` | Entry point: wires everything together, handles server commands, reports status every second. |
-| `ServerConnection.cs` | UDP discovery, TCP connection with auto-reconnect, clock-sync pings (background threads). |
-| `ClockSync.cs` | Offset between the headset clock and the server clock (lowest-round-trip sample wins). |
-| `SyncEngine.cs` | Scheduling and drift correction; a port of `server/syncvr/sync_engine.py`. |
-| `UnityVideoBackend.cs` | Unity `VideoPlayer` (hardware decoding) behind the `IVideoPlayer` interface. |
-| `VideoScreen.cs` | 360/180 via the `Skybox/Panoramic` shader (handles stereo per eye), or a flat screen. |
-| `ContentManager.cs` | Local video folder, resumable downloads, deletion. |
-| `DeviceInfo.cs` | Battery, temperature, storage, Wi-Fi signal, worn/not worn; Wi-Fi locks. |
-| `Overlay.cs` | In-headset text: status screen, operator messages, identify banner + beep. |
-| `HeadsetConfig.cs` | Optional `config.json` (fixed server address, discovery filters). |
-| `Editor/SyncVRBuild.cs` | Menu items to configure the project for Oculus Go and build the APK. |
+**Current state:** the native player is a diagnostic build for
+[Checkpoint 1](#checkpoint-1-hardware-check). It plays one video but doesn't connect to the
+server yet. That comes in phase 1B (see [EXECUTION_PLAN.md](EXECUTION_PLAN.md)). Until then,
+the only app that can run a synced show is the Unity one, described in
+[UNITY_PLAYER.md](UNITY_PLAYER.md).
 
-## Native player: Checkpoint 1 (hardware check)
+## Getting the APK
 
-A native Oculus Go player (Kotlin + C++ VrApi 1.36, in [`player-android/`](../player-android))
-is replacing the Unity app. It uses the same package name (`com.syncvr.player`) and video folder,
-so it **replaces** the Unity app on a headset. This first build is a diagnostic skeleton: it
-doesn't connect to the server yet. It plays one video and cycles through four ways of showing
-it, so we can find out which display path works on the Go. That takes about 15 minutes with
-one headset.
-
-### 1. Get the APK
+Nothing needs building on your machine. GitHub Actions builds and signs the APK on every push.
 
 1. Open the repository on GitHub → **Actions** → the latest green **CI** run on the branch.
 2. Under **Artifacts**, download **SyncVRPlayer-apk**. It's a zip; unzip it to get
    `SyncVRPlayer.apk`.
 
-CI signs the APK with the key stored in the repository secrets, so later builds install over
-this one.
+Every build is signed with the same key (stored in the repository secrets), so a newer APK
+installs over an older one without losing videos.
 
-### 2. Install and copy a video
+## Preparing headsets
 
-With the headset plugged in over USB (developer mode on, USB debugging allowed):
+Each Oculus Go needs **developer mode** once (Oculus/Meta phone app › Devices › the
+headset › Developer Mode; this requires a developer organization on the Meta developer
+site). Then connect it over USB and accept the *Allow USB debugging* prompt inside the headset.
+
+With [Android platform-tools](https://developer.android.com/tools/releases/platform-tools)
+(`adb`) installed, from `server/`:
 
 ```bash
-syncvr adb setup SyncVRPlayer.apk        # installs, disables the proximity sensor, launches
-syncvr adb push my_360_video.mp4         # any 360° equirectangular video
-syncvr adb launch                        # restart so it picks up the video
+python3 -m syncvr adb devices                            # list headsets, battery, temperature
+python3 -m syncvr adb setup ~/Downloads/SyncVRPlayer.apk # install + config + prox-off + launch
+python3 -m syncvr adb push ../content/*.mp4              # copy videos over USB (4 headsets at a time)
+python3 -m syncvr adb list                               # what's on each headset
+```
+
+Every command runs on all connected headsets in parallel; add `-s SERIAL` to target one.
+Other commands: `install`, `configure`, `launch`, `stop`, `prox-off`, `prox-on`, `wifi`
+(switch to Wi-Fi ADB), `connect IP…`, `reboot`, `shell CMD…`.
+
+* **Proximity sensor.** `setup` runs `prox-off` so the headset keeps playing when nobody is
+  wearing it (useful while preparing a room). This lasts until the headset reboots; use
+  `--keep-proximity` to skip it.
+* **Where videos live.** `/sdcard/Android/data/com.syncvr.player/files/videos/`. Reinstalling
+  with `adb install -r` (what `install`/`setup` do) keeps them; *uninstalling* the app deletes them.
+* **Fixed server address** (used once the player connects to the server, phase 1B). If UDP
+  broadcast doesn't reach the headsets (client isolation, VLANs), write a config:
+  `python3 -m syncvr adb configure --server 192.168.1.10`. With several servers on one
+  network, `--server-name "Room A"` makes headsets only join the server started with
+  `--name "Room A"`.
+
+Once the player connects to the server (phase 1B), it shows its name and connection state on a
+dark screen while idle. Headsets use their Android serial number as their ID, which is the same
+serial `adb devices` shows, so it's easy to match a physical headset to its dashboard card.
+
+## Checkpoint 1 (hardware check)
+
+This first build plays one video and cycles through four ways of showing it. The goal is to
+find out which display path works on the Go. It takes about 15 minutes with one headset.
+
+### Install and copy a video
+
+After installing the APK as above, from `server/`:
+
+```bash
+python3 -m syncvr adb push my_360_video.mp4   # any 360° equirectangular video
+python3 -m syncvr adb launch                  # restart so it picks up the video
 ```
 
 The player plays the **first video, alphabetically**, in
@@ -50,7 +75,7 @@ The player plays the **first video, alphabetically**, in
 A mono 360° video is the most useful. If you also have a top/bottom 3D 360° video, test it as
 a second run (rename it so it sorts first, or push it alone).
 
-### 3. Watch the four modes
+### Watch the four modes
 
 Put the headset on. Every **15 seconds** it switches to the next mode and loops. A small text
 panel in front of you names the current mode (for example "1/4 Equirect layer (mono)"):
@@ -70,7 +95,7 @@ For each mode, note:
 * Is the text panel readable, and where is it (too close, too far, off to one side)?
 * Is there sound?
 
-### 4. Send me the log
+### Send the log
 
 Leave it running through at least two full cycles (about 2 minutes), then:
 
@@ -105,110 +130,3 @@ Known suspects, so you know what to look for:
 * **Black in mode 2 only:** look for `updateTexImage` or `Sphere` errors in the log.
 * **`vrapi_EnterVrMode failed` repeating**, or `Render thread still in VR mode` after taking
   the headset off: note when it happened.
-
-## Building the APK (Unity app)
-
-This section and the ones after it are about the Unity app, which stays as a fallback until the
-native player has proven itself.
-
-
-1. Install **Unity 2019.4 LTS** (use 2019.4.41f2, the security-patched release) with **Android Build
-   Support** (including the Android SDK/NDK and OpenJDK options) from Unity Hub's archive.
-   Newer Unity versions dropped Oculus Go support.
-2. Open the `headset/` folder as a project in Unity Hub.
-3. Menu **SyncVR › 1. Configure for Oculus Go**. This switches to Android, sets the
-   player settings (package `com.syncvr.player`, API 25+, ARMv7, OpenGL ES 3, single-pass
-   stereo), creates the scene and materials, installs the *Oculus (Android)* package and
-   enables Oculus in the legacy VR settings. Watch the Console: it ends with
-   "project configured for Oculus Go".
-   * If the package can't be installed automatically, add **Oculus (Android)** in
-     *Window › Package Manager*, then in *Project Settings › Player › XR Settings* (Android
-     tab) tick *Virtual Reality Supported* and add *Oculus*.
-4. Menu **SyncVR › 2. Build APK** → `headset/Builds/SyncVRPlayer.apk`.
-
-After configuring once in the editor (and committing `headset/ProjectSettings` and
-`headset/Packages`), builds can run headless:
-
-```bash
-Unity -batchmode -quit -projectPath headset \
-      -executeMethod SyncVR.EditorTools.SyncVRBuild.BuildFromCommandLine -logFile build.log
-```
-
-## Preparing headsets
-
-Each Oculus Go needs **developer mode** once (Oculus/Meta phone app › Devices › the
-headset › Developer Mode; this requires a developer organization on the Meta developer
-site). Then connect it over USB and accept the *Allow USB debugging* prompt inside the headset.
-
-With [Android platform-tools](https://developer.android.com/tools/releases/platform-tools)
-(`adb`) installed, from `server/`:
-
-```bash
-python3 -m syncvr adb devices                                   # list headsets, battery, temperature
-python3 -m syncvr adb setup ../headset/Builds/SyncVRPlayer.apk  # install + config + prox-off + launch
-python3 -m syncvr adb push ../content/*.mp4                     # copy videos over USB (4 headsets at a time)
-python3 -m syncvr adb list                                      # what's on each headset
-```
-
-Every command runs on all connected headsets in parallel; add `-s SERIAL` to target one.
-Other commands: `install`, `configure`, `launch`, `stop`, `prox-off`, `prox-on`, `wifi`
-(switch to Wi-Fi ADB), `connect IP…`, `reboot`, `shell CMD…`.
-
-* **Proximity sensor.** `setup` runs `prox-off` so the headset keeps playing when nobody is
-  wearing it (useful while preparing a room). This lasts until the headset reboots; use
-  `--keep-proximity` to skip it.
-* **Where videos live.** `/sdcard/Android/data/com.syncvr.player/files/videos/`. Reinstalling
-  with `adb install -r` (what `install`/`setup` do) keeps them; *uninstalling* the app deletes them.
-* **Fixed server address.** If UDP broadcast doesn't reach the headsets (client isolation,
-  VLANs), write a config: `python3 -m syncvr adb configure --server 192.168.1.10`. With
-  several servers on one network, `--server-name "Room A"` makes headsets only join the
-  server started with `--name "Room A"`.
-
-The headset shows its name and connection state on a dark screen while idle. Headsets
-use their Android serial number as their ID, which is the same serial `adb devices`
-shows, so it's easy to match a physical headset to its dashboard card.
-
-## First test on hardware
-
-This app compiles against the Unity 2019.4 APIs, but it hasn't been built or run on an
-Oculus Go yet. Check these first, roughly in order of risk:
-
-1. **Speed changes on Unity's Android video player.** Rate correction sets
-   `VideoPlayer.playbackSpeed` to between 0.95 and 1.05. Some Unity versions had problems
-   with speed changes on Android (freezing, or audio dropping out). The engine detects
-   a frozen video and switches that headset to seek-only correction by itself.
-   If audio misbehaves, set *Correction mode* to `seek` in the dashboard's Settings tab.
-   That applies to the whole fleet immediately, with no rebuild.
-2. **360° orientation.** The Panoramic skybox shader and the base yaw used in
-   `VideoScreen.cs` should put the centre of the video in front of the viewer. If it's
-   off by 90° or 180°, set *Yaw°* for that video in the Library tab (or change `Base360Yaw`).
-3. **Stereo.** Play a top/bottom 3D video and check each eye gets its own half.
-4. **Sync.** Put two or three headsets side by side with their speakers on. After a few
-   seconds of playback the audio should sound like a single source. The *drift* figure on
-   each card should settle under ~20 ms. The *start_latency_ms* and *seek_time_ms*
-   calibration values are in each headset's status (visible via `GET /api/state`) and
-   are saved on the headset between runs.
-5. **Discovery.** If headsets stay on "Searching for server…", check the router's
-   client isolation setting or use `adb configure --server`.
-6. **Downloads.** Push a large file, turn Wi-Fi off halfway through, and check it resumes.
-
-Useful logs: `adb logcat -s Unity` shows the app's `[SyncVR]` messages.
-
-## Using a different video decoder
-
-Everything playback-related goes through `IVideoPlayer` (in `SyncEngine.cs`). To use,
-say, AVPro Video (ExoPlayer backend, HEVC, pitch-corrected speed changes), write a
-class implementing that interface around its `MediaPlayer` and construct it in
-`SyncVRApp.Awake` instead of `UnityVideoBackend`.
-
-## Engine tests without Unity
-
-```bash
-cd headset
-mcs -out:/tmp/enginetests.exe Tests~/EngineTests.cs Assets/SyncVR/Scripts/SyncEngine.cs \
-    Assets/SyncVR/Scripts/Messages.cs Assets/SyncVR/Scripts/ClockSync.cs
-mono /tmp/enginetests.exe
-```
-
-These run the C# engine against a simulated decoder on a virtual clock. The same
-scenarios run against the Python reference in `server/tests/test_sync_engine.py`.

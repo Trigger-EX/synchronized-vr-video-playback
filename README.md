@@ -67,14 +67,16 @@ python3 -m syncvr sim --count 20
 
 ### 2. Build and install the headset app
 
-See **[docs/HEADSET_SETUP.md](docs/HEADSET_SETUP.md)**. In short: open `headset/` in
-Unity 2019.4 LTS, run **SyncVR › 1. Configure for Oculus Go** and **SyncVR › 2. Build APK**,
-then with headsets on USB:
+See **[docs/HEADSET_SETUP.md](docs/HEADSET_SETUP.md)**. The native player's APK is built by
+GitHub Actions (download the **SyncVRPlayer-apk** artifact). With headsets on USB:
 
 ```bash
-python3 -m syncvr adb setup headset/Builds/SyncVRPlayer.apk   # install, configure, launch
-python3 -m syncvr adb push content/*.mp4                       # optional: fast USB preload
+python3 -m syncvr adb setup SyncVRPlayer.apk   # install, configure, launch
+python3 -m syncvr adb push content/*.mp4       # optional: fast USB preload
 ```
+
+The native player is still a diagnostic build that doesn't join the server yet. Until it does,
+shows run on the Unity app: see [docs/UNITY_PLAYER.md](docs/UNITY_PLAYER.md).
 
 ### 3. Run a show
 
@@ -123,7 +125,8 @@ worst headset under 20 ms once playing.
 |---|---|
 | Server, dashboard, protocol, content distribution, ADB tool | Working; 42 automated tests (`cd server && python3 -m pytest`), including end-to-end runs with simulated headsets. |
 | Sync engine | Python reference and C# port pass the same scenario tests (`headset/Tests~/EngineTests.cs`, runs under Mono). |
-| Headset app (Unity) | Compiles against the Unity 2019.4 engine and editor APIs, but has **not yet been built into an APK or run on an Oculus Go**. Expect a first round of on-device fixes. The main unknowns are listed in [docs/HEADSET_SETUP.md](docs/HEADSET_SETUP.md#first-test-on-hardware). |
+| Headset app (native) | Diagnostic build in `player-android/`, built and signed by CI. Waiting on the first hardware check ([Checkpoint 1](docs/HEADSET_SETUP.md#checkpoint-1-hardware-check)); server connection and sync come next. |
+| Headset app (Unity, fallback) | Compiles against the Unity 2019.4 engine and editor APIs, but has **not yet been built into an APK or run on an Oculus Go**. The main unknowns are listed in [docs/UNITY_PLAYER.md](docs/UNITY_PLAYER.md#first-test-on-hardware). |
 
 ## Roadmap
 
