@@ -158,7 +158,7 @@ rejoin, and a full-length video while watching temperature and drift on the dash
    versions, offline headsets; cards sortable by battery.
 5. **Server packaging:**
    * a `systemd` service and Raspberry Pi guide
-   * single-file server downloads for Windows, macOS and Linux, built by CI
+   * self-contained desktop app for Windows, macOS (arm64) and Linux (PyInstaller onedir), built by CI and published to the rolling release `desktop-<branch>` (done; `tools/get-desktop.sh|.ps1`)
    * an installable dashboard for tablets (web-app manifest)
 
 **Checkpoint 4 (you):** reboot a headset (does it start SyncVR?), push an app update, switch to 60 Hz.

@@ -20,10 +20,10 @@ account and no internet connection.
 
 | Part | Where | What it is |
 |---|---|---|
-| **Server + dashboard** | [`server/`](server/) | Python 3.8+ (one dependency: aiohttp). Runs on any laptop, mini-PC or Raspberry Pi on the headsets' network. Replaces Headjack Operator. |
+| **Server + operator window** | [`server/`](server/) | Native desktop app (no install, no Python needed) or Python 3.8+ from source. Runs on any laptop or mini-PC on the headsets' network. Replaces Headjack Operator. |
 | **Headset app** | [`player-android/`](player-android/) | Native Oculus Go player (Kotlin + C++, built and signed by CI, no Unity). Replaces Headjack Link / the Cinema template. |
 | **Fleet tool** | `python -m syncvr adb …` | Installs the app, writes config and copies videos to many USB-connected headsets in parallel. |
-| **Simulator** | `python -m syncvr sim` | Simulated headsets that run the real sync code, for trying the dashboard and load-testing without hardware. |
+| **Simulator** | `python -m syncvr sim` | Simulated headsets that run the real sync code, for trying the operator window and load-testing without hardware. |
 
 ## What it does (compared with Headjack)
 
@@ -89,7 +89,24 @@ The native player has run on hardware (see the status table below).
    **±10 s**, the seek bar and **Play from start** all stay in sync.
 5. Watch the **drift** figure on each card: under ~20 ms is normal.
 
-## Launcher (PC control window)
+## Desktop app (recommended)
+
+CI builds a self-contained app for Linux (x86_64), Windows and macOS (Apple silicon / arm64 only) and
+publishes it on the rolling prerelease `desktop-<branch>` (Releases page). Nothing else needs to be
+installed, not even Python. Fetch it with a script (it picks your current git branch, or pass one):
+
+```bash
+tools/get-desktop.sh            # Linux/macOS: installs into ~/SyncVR (Linux also adds a menu entry)
+tools\get-desktop.ps1           # Windows (PowerShell): installs into %USERPROFILE%\SyncVR + Start menu shortcut
+```
+
+* **Windows:** SmartScreen may warn about an unknown publisher the first time: click **More info > Run anyway**.
+* **macOS:** the app is ad-hoc signed. Files downloaded with `curl` (as the script does) are not quarantined, so Gatekeeper does not prompt; a browser download would need right-click > Open.
+* **Linux:** no packages needed; the bundle carries its Qt libraries.
+* Data (settings, state, logs, content) lives in a per-user folder (`~/.local/share/SyncVR`, `%LOCALAPPDATA%\SyncVR`, `~/Library/Application Support/SyncVR`). Create an empty file named `portable` next to the executable to keep everything beside it instead. Existing `server/data` from a source run is not picked up.
+* `SyncVR --self-test` starts the server offscreen, checks one snapshot and exits 0 (used by CI).
+
+## Launcher from source (developers)
 
 Double-click instead of using a terminal: `Start SyncVR.desktop` (Linux; on Linux Mint's Nemo, right-click > Properties > Permissions > "Allow executing file as program", then choose
 "Trust and launch" the first time, or run `./start-syncvr.sh`) `Start SyncVR.pyw` (Windows; WSL users

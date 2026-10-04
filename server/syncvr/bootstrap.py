@@ -59,7 +59,7 @@ def _pip_install(py: Path) -> bool:
     kwargs = {}
     if sys.platform.startswith("win"):
         kwargs["creationflags"] = getattr(subprocess, "CREATE_NEW_CONSOLE", 0)  # visible progress under pythonw
-    print("Installing SyncVR dependencies (first run, ~100 MB)...")
+    print("Installing SyncVR dependencies (first run, ~100 MB). No Python? tools/get-desktop.sh|.ps1 installs the ready-made desktop app instead.")
     try:
         return subprocess.call(cmd, **kwargs) == 0
     except OSError as exc:
