@@ -56,6 +56,17 @@ Goal: answer the risky questions about the Go before building everything on top 
 right. Also send the `adb logcat` lines tagged `SyncVR`. This decides whether the main path is the
 compositor layer or the fallback sphere.
 
+**Checkpoint 1 results (2026-10-03, Go on its final OS, VrApi 1.32, 2880×1440 mono H.264 video):**
+* All four modes showed video at a steady ~60 fps. Equirect layer (mode 1) and sphere fallback
+  (mode 2) both looked like normal playback. Mode 1 becomes the main path, and mode 2 is kept as a fallback.
+* Cylinder (mode 3): a flat screen in front of the viewer, as intended.
+* Stereo top/bottom (mode 4) with a mono video: one eye saw the sky and the other the ground. This is
+  expected, because each eye gets half of a mono frame. The eye order still needs a real top/bottom 3D video.
+* Hardware decoders (AVC and HEVC) accept up to 4096×2048 at 30 fps, but not 5120×2560. This
+  matches the defaults in `server/syncvr/limits.py`.
+* Sleep/wake and the Oculus button: VR mode is left and re-entered cleanly, and playback resumes
+  locally. In 1B it must instead resync to the operator's position (step 7 below).
+
 ## Phase 3, part 1 (while waiting for checkpoint 1): content checks and checksums
 
 Server-only work, so nothing sits idle while you test. Pulled forward from phase 3.
