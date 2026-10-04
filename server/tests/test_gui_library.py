@@ -107,3 +107,23 @@ def test_refresh_keeps_rows_and_failure_reloads(win):
     assert tab.model.rowCount() == 0 and resets
     tab.rescan_button.click()
     assert win.bridge.calls[-1] == ("rescan",)
+
+
+def test_auto_choice_and_source_tooltip(win):
+    tab = feed(win, [video(format_source="filename", projection="180", stereo="sbs")])
+    m = tab.model
+    assert cell(tab, 0, lib.PROJECTION) == "Auto (180°)"
+    assert "file name" in cell(tab, 0, lib.PROJECTION, Qt.ToolTipRole)
+    delegate = tab.table.itemDelegateForColumn(lib.PROJECTION)
+    idx = m.index(0, lib.PROJECTION)
+    combo = delegate.createEditor(tab, None, idx)
+    assert combo.itemText(0) == "Auto (detected: 180°)"
+    delegate.setEditorData(combo, idx)
+    assert combo.currentData() == "auto"
+    n = len(win.bridge.calls)
+    assert not m.setData(idx, "auto") and len(win.bridge.calls) == n  # already auto
+    assert m.setData(idx, "flat")
+    assert win.bridge.calls[-1] == ("update_video", "a.mp4", {"projection": "flat"})
+    assert cell(tab, 0, lib.PROJECTION) == "Flat screen"
+    assert m.setData(idx, "auto")
+    assert win.bridge.calls[-1] == ("update_video", "a.mp4", {"projection": "auto"})

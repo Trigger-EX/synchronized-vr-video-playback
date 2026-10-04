@@ -604,8 +604,21 @@ class Controller:
             raise CommandError(f"no such video: {name}")
         except ValueError as exc:
             raise CommandError(str(exc))
+        if {"projection", "stereo", "rotation"} & changes.keys():
+            self._push_view(video)
         self.changed(persist=True)
         return video
+
+    def _push_view(self, video: Video) -> None:
+        """Tell headsets that have this video loaded how to display it now."""
+        view = {k: v for k, v in video.playback_fields().items()
+                if k in ("projection", "stereo", "rotation")}
+        for dev in self.devices.values():
+            d = dev.desired
+            if d and d.get("mode") in ("playing", "paused") and d.get("video") == video.name:
+                d.update(view)
+                if dev.online:
+                    self.send(dev, dict(view, type="view", video=video.name))
 
     def set_max_downloads(self, value: int) -> None:
         self.distributor.max_concurrent = max(0, int(value))

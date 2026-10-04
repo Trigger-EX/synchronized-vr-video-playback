@@ -29,9 +29,35 @@ class Video:
     stereo: str = "mono"
     rotation: float = 0.0  # yaw offset in degrees applied on the headset
     loop: bool = False
+    # Where projection/stereo came from: operator, filename, resolution or default.
+    format_source: str = "default"
 
     def meta(self) -> dict:
         return {k: getattr(self, k) for k in EDITABLE_FIELDS}
+
+    def detect_format(self, stored: Optional[dict] = None) -> None:
+        """Set projection/stereo and format_source.
+        Precedence per field: operator value > filename > resolution > default."""
+        stored = stored or {}
+        by_name = guess_format(self.name)
+        by_res = guess_from_resolution(self.width, self.height)
+        have_res = bool(self.width and self.height)
+        sources = set()
+        for key in ("projection", "stereo"):
+            if key in stored:
+                setattr(self, key, stored[key])
+                sources.add("operator")
+            elif key in by_name:
+                setattr(self, key, by_name[key])
+                sources.add("filename")
+            else:
+                setattr(self, key, by_res[key])
+                sources.add("resolution" if have_res else "default")
+        for src in ("operator", "filename", "resolution"):
+            if src in sources:
+                self.format_source = src
+                return
+        self.format_source = "default"
 
     def playback_fields(self) -> dict:
         """What a headset needs to know to render this video."""
@@ -46,19 +72,41 @@ class Video:
 
 def guess_format(filename: str) -> Dict[str, str]:
     """Infer projection/stereo layout from common filename conventions,
-    e.g. ``concert_360_TB.mp4``, ``trailer-180-sbs.mp4``, ``intro_flat.mp4``."""
+    e.g. ``concert_360_TB.mp4``, ``trailer-180-sbs.mp4``, ``intro_flat.mp4``.
+    Only fields the name actually mentions are returned."""
     tokens = set(re.split(r"[\s_\-.\[\]()]+", Path(filename).stem.lower()))
-    projection = "360"
+    out: Dict[str, str] = {}
     if "180" in tokens or "vr180" in tokens:
-        projection = "180"
+        out["projection"] = "180"
+    elif "360" in tokens:
+        out["projection"] = "360"
     elif tokens & {"flat", "2d", "screen", "rect"}:
-        projection = "flat"
-    stereo = "mono"
+        out["projection"] = "flat"
     if tokens & {"tb", "ou", "overunder", "topbottom", "3dv", "stereo"}:
-        stereo = "tb"
+        out["stereo"] = "tb"
     elif tokens & {"sbs", "lr", "sidebyside", "3dh"}:
-        stereo = "sbs"
-    return {"projection": projection, "stereo": stereo}
+        out["stereo"] = "sbs"
+    elif tokens & {"mono", "2d"}:
+        out["stereo"] = "mono"
+    return out
+
+
+def guess_from_resolution(width: Optional[int], height: Optional[int]) -> Dict[str, str]:
+    """Infer layout from the frame aspect ratio. Falls back to 360 mono."""
+    if not width or not height:
+        return {"projection": "360", "stereo": "mono"}
+    ratio = width / height
+    if abs(ratio - 2.0) < 0.1:
+        return {"projection": "360", "stereo": "mono"}
+    if abs(ratio - 1.0) < 0.1:
+        return {"projection": "360", "stereo": "tb"}
+    if abs(ratio - 4.0) < 0.2:
+        return {"projection": "360", "stereo": "sbs"}
+    if 1.6 <= ratio <= 1.9:
+        return {"projection": "flat", "stereo": "mono"}
+    if abs(ratio - 3.55) < 0.15:
+        return {"projection": "flat", "stereo": "sbs"}
+    return {"projection": "360", "stereo": "mono"}
 
 
 class Library:
@@ -90,12 +138,13 @@ class Library:
                 video.duration, video.width, video.height = info.duration, info.width, info.height
             except (OSError, ValueError) as exc:
                 log.warning("could not read metadata from %s: %s", path.name, exc)
-            guessed = guess_format(path.name)
-            video.projection, video.stereo = guessed["projection"], guessed["stereo"]
             video.title = path.stem
-            for key, value in self.metadata.get(path.name, {}).items():
-                if key in EDITABLE_FIELDS:
+            stored = {k: v for k, v in self.metadata.get(path.name, {}).items()
+                      if k in EDITABLE_FIELDS}
+            for key, value in stored.items():
+                if key not in ("projection", "stereo"):
                     setattr(video, key, value)
+            video.detect_format(stored)
             found[path.name] = video
         changed = found.keys() != self.videos.keys() or any(
             found[n] is not self.videos.get(n) for n in found
@@ -125,9 +174,13 @@ class Library:
         if video is None:
             raise KeyError(name)
         clean = {}
+        auto = set()
         for key, value in changes.items():
             if key not in EDITABLE_FIELDS:
                 raise ValueError(f"cannot edit {key}")
+            if key in ("projection", "stereo") and value == "auto":
+                auto.add(key)
+                continue
             if key == "projection" and value not in PROJECTIONS:
                 raise ValueError(f"projection must be one of {PROJECTIONS}")
             if key == "stereo" and value not in STEREO_MODES:
@@ -139,9 +192,17 @@ class Library:
             if key == "title":
                 value = str(value)[:200]
             clean[key] = value
+        stored = self.metadata.setdefault(name, {})
+        for key, value in clean.items():
+            if getattr(video, key) != value or key in stored:
+                stored[key] = value
+        for key in auto:
+            stored.pop(key, None)
         for key, value in clean.items():
             setattr(video, key, value)
-        self.metadata[name] = video.meta()
+        video.detect_format({k: v for k, v in stored.items() if k in ("projection", "stereo")})
+        if not stored:
+            self.metadata.pop(name, None)
         return video
 
     def to_json(self) -> List[dict]:

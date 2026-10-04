@@ -38,7 +38,7 @@ account and no internet connection.
 | Works offline on a local router | Nothing ever touches the internet. |
 | Send messages to viewers | Text shown inside the headsets. "Identify" shows a headset's name and beeps so you can find it. |
 | Recenter viewers | "Recenter view" makes each viewer's current direction the front of the video. |
-| 360 / 180 / flat, mono / stereo | 360° and 180° equirectangular, mono, top/bottom or side-by-side 3D, and a flat cinema screen. Guessed from file names (`_360_TB`, `_180_SBS`, `_flat`), editable in the Library tab. |
+| 360 / 180 / flat, mono / stereo | 360° and 180° equirectangular, mono, top/bottom or side-by-side 3D, and a flat cinema screen. Detected from file names (`_360_TB`, `_180_SBS`, `_flat`), else from the video's aspect ratio (2:1 360 mono, 1:1 360 top/bottom, 4:1 360 side-by-side, 16:9 flat), else 360 mono. Your choice in the Library tab (or the View box in the playback panel) is remembered per video and wins; "Auto" goes back to detection. Changes apply live on headsets playing that video. |
 | Logs | Event log in the operator window (connects, downloads, errors reported by headsets). |
 
 Not included (yet): Headjack's cloud CMS and analytics, subtitles, viewer-driven kiosk menus,

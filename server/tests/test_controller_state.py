@@ -71,3 +71,21 @@ def test_load_ignores_downloads_for_unknown_devices(content_dir):
     state = {"downloads": {"ghost": {"files": ["a.mp4"], "delete_others": False}}}
     c = make_controller(content_dir, state)
     assert not c.distributor.queue
+
+
+def test_update_video_view_pushed_to_devices_playing_it(content_dir):
+    c = make_controller(content_dir)
+    playing, other = connect(c, "hs1"), connect(c, "hs2")
+    c.execute("play", {"targets": ["hs1"], "video": "concert_360_TB.mp4"})
+    c.execute("play", {"targets": ["hs2"], "video": "trailer_flat.mp4"})
+    playing.sent.clear()
+    other.sent.clear()
+
+    c.update_video("concert_360_TB.mp4", {"title": "New"})
+    assert playing.sent == []  # title is not a view change
+
+    c.update_video("concert_360_TB.mp4", {"projection": "180", "rotation": 90})
+    assert playing.sent == [{"type": "view", "video": "concert_360_TB.mp4",
+                             "projection": "180", "stereo": "tb", "rotation": 90.0}]
+    assert other.sent == []
+    assert c.devices["hs1"].desired["projection"] == "180"

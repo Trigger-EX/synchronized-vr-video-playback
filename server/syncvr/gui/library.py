@@ -15,6 +15,20 @@ PROJECTIONS = (("360", "360°"), ("180", "180°"), ("flat", "Flat screen"))
 STEREO_MODES = (("mono", "Mono"), ("tb", "3D top/bottom"), ("sbs", "3D side-by-side"))
 CHOICES = {PROJECTION: PROJECTIONS, STEREO: STEREO_MODES}
 CHECK_COLORS = LEVEL_COLORS
+SOURCE_LABELS = {"operator": "set by you", "filename": "from the file name",
+                 "resolution": "from the video's aspect ratio", "default": "default"}
+
+
+def choice_label(col, v) -> str:
+    """Cell text for a projection/stereo value; shows Auto while it is detected."""
+    label = dict(CHOICES[col]).get(v.get(FIELDS[col]), v.get(FIELDS[col]))
+    return label if v.get("format_source", "operator") == "operator" else "Auto (%s)" % label
+
+
+def auto_label(col, v) -> str:
+    if v.get("format_source", "operator") == "operator":
+        return "Auto (detect again)"
+    return "Auto (detected: %s)" % dict(CHOICES[col]).get(v.get(FIELDS[col]), v.get(FIELDS[col]))
 
 
 class LibraryModel(QAbstractTableModel):
@@ -87,7 +101,7 @@ class LibraryModel(QAbstractTableModel):
         if col == SIZE:
             return fmt.fmt_bytes(v.get("size"))
         if col in CHOICES:
-            return dict(CHOICES[col]).get(v.get(FIELDS[col]), v.get(FIELDS[col]))
+            return choice_label(col, v)
         if col == ROTATION:
             return v.get("rotation")
         return None
@@ -95,6 +109,8 @@ class LibraryModel(QAbstractTableModel):
     def _tooltip(self, v, col):
         if col == FILE:
             return v["name"]
+        if col in CHOICES:
+            return "Format %s" % SOURCE_LABELS.get(v.get("format_source"), "unknown")
         if col != CHECKS or not v.get("analysis"):
             return None
         lines = ["%s: %s" % (i.get("level"), i.get("message")) for i in v.get("issues") or []]
@@ -125,9 +141,16 @@ class LibraryModel(QAbstractTableModel):
             value = str(value) if col == TITLE else value
         video = self.videos[index.row()]
         field = FIELDS[col]
-        if video.get(field) == value:
+        if value == "auto":  # drop the stored choice; the next snapshot shows what was detected
+            if video.get("format_source") != "operator":
+                return False
+            self._on_edit(video["name"], {field: "auto"})
+            return True
+        if video.get(field) == value and (col not in CHOICES or video.get("format_source") == "operator"):
             return False
-        video[field] = value  # optimistic; the next snapshot (or a failure reload) is authoritative
+        video[field] = value
+        if col in CHOICES:
+            video["format_source"] = "operator"  # optimistic; the next snapshot (or a failure reload) is authoritative
         self.dataChanged.emit(index, index)
         self._on_edit(video["name"], {field: value})
         return True
@@ -136,13 +159,16 @@ class LibraryModel(QAbstractTableModel):
 class ChoiceDelegate(QStyledItemDelegate):
     def createEditor(self, parent, option, index):
         combo = QComboBox(parent)
+        combo.addItem(auto_label(index.column(), index.model().videos[index.row()]), "auto")
         for value, label in CHOICES[index.column()]:
             combo.addItem(label, value)
         combo.activated.connect(lambda _i, c=combo: (self.commitData.emit(c), self.closeEditor.emit(c)))
         return combo
 
     def setEditorData(self, editor, index) -> None:
-        editor.setCurrentIndex(max(0, editor.findData(index.data(Qt.EditRole))))
+        v = index.model().videos[index.row()]
+        value = index.data(Qt.EditRole) if v.get("format_source", "operator") == "operator" else "auto"
+        editor.setCurrentIndex(max(0, editor.findData(value)))
 
     def setModelData(self, editor, model, index) -> None:
         model.setData(index, editor.currentData(), Qt.EditRole)

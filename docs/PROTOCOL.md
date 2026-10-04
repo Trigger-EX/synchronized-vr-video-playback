@@ -59,6 +59,7 @@ position error, + = ahead), `rate`, `mode`, `seek_time_ms`, `start_latency_ms`,
 | `device_info` | `device_name`, `group` | headset renamed |
 | `play` | `video`, `projection`, `stereo`, `rotation`, `duration`, `pos`, `at`, `loop` | be at `pos` at server time `at` and keep playing (loads the video if needed; joins late if `at` has passed) |
 | `pause` | same, `at` = when to pause | at `at`, pause and show exactly `pos` (also used to load a video and hold it) |
+| `view` | `video`, `projection`, `stereo`, `rotation` | the operator changed how this video is displayed; apply it to the loaded video `video` immediately without seeking or pausing (ignore if another video is loaded). `play`/`pause` always carry the current values too |
 | `stop` | | unload, show the idle screen |
 | `volume` | `value` 0–1 | |
 | `recenter` | | current viewing direction becomes the front |
@@ -152,7 +153,7 @@ SyncVR with plain HTTP calls. With `--password`, send HTTP basic auth (any user 
 | `POST /api/command` | `{"action": …, "targets": …, …}` → `{"ok": true, "result": …}` or 400 `{"error": …}` |
 | `GET/POST /api/settings` | read / change sync settings (partial updates; `max_downloads` too) |
 | `POST /api/library/rescan` | re-read the content folder (also happens every 30 s) |
-| `POST /api/library/<file>` | `{"title", "projection", "stereo", "rotation", "loop"}` (any subset) |
+| `POST /api/library/<file>` | `{"title", "projection", "stereo", "rotation", "loop"}` (any subset; `projection`/`stereo` also accept `"auto"` to drop the stored choice and re-detect) |
 | `POST /api/devices/<id>` | `{"name", "group"}` |
 | `DELETE /api/devices/<id>` | forget an offline headset |
 | `GET /content/<file>` | the video file (supports Range); `X-Content-SHA256` header once the checksum is known |

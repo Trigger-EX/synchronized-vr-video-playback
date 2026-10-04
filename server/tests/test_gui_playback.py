@@ -150,3 +150,21 @@ def test_volume_sends_on_release(win):
     assert last(win) == ("volume", "all", {"value": 0.25})
     p.volume.setValue(60)
     assert last(win) == ("volume", "all", {"value": 0.6})
+
+
+def test_view_combo_sends_update_video(win):
+    lib = [dict(LIBRARY[0], projection="360", stereo="mono", format_source="filename"), LIBRARY[1]]
+    feed(win, [make_device("a")], library=lib)
+    p = win.playback
+    assert p.view_combo.currentData() == "auto"
+    assert win.bridge.calls == []  # syncing the combo sends nothing
+    p.view_combo.setCurrentIndex(p.view_combo.findData("180/sbs"))
+    p._on_view_chosen(p.view_combo.currentIndex())
+    assert last(win) == ("update_video", "a.mp4", {"projection": "180", "stereo": "sbs"})
+    p.view_combo.setCurrentIndex(0)
+    p._on_view_chosen(0)
+    assert last(win) == ("update_video", "a.mp4", {"projection": "auto", "stereo": "auto"})
+    lib[0]["format_source"] = "operator"
+    lib[0]["projection"], lib[0]["stereo"] = "flat", "mono"
+    feed(win, [make_device("a")], library=lib)
+    assert p.view_combo.currentData() == "flat/mono"
