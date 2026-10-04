@@ -23,7 +23,7 @@ object JavaHttpFetcher : HttpFetcher {
     override fun get(url: String, rangeStart: Long): HttpResponse {
         val c = URL(url).openConnection() as HttpURLConnection
         c.connectTimeout = 15000
-        c.readTimeout = 30000
+        c.readTimeout = 10000
         if (rangeStart > 0) c.setRequestProperty("Range", "bytes=$rangeStart-")
         val code = c.responseCode
         return object : HttpResponse {

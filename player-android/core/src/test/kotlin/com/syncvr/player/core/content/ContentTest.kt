@@ -33,6 +33,25 @@ private class FakeHttp(val data: Map<String, ByteArray>, val honorRange: Boolean
     }
 }
 
+private class BlockingHttp : HttpFetcher {
+    override fun get(url: String, rangeStart: Long): HttpResponse {
+        val closed = java.util.concurrent.CountDownLatch(1)
+        return object : HttpResponse {
+            override val status = 200
+            override val body = object : java.io.InputStream() {
+                var sent = false
+                override fun read(): Int = throw UnsupportedOperationException()
+                override fun read(b: ByteArray, off: Int, len: Int): Int {
+                    if (!sent) { sent = true; b.fill(1, off, off + 100); return 100 }
+                    closed.await()
+                    throw java.io.IOException("closed")
+                }
+            }
+            override fun close() = closed.countDown()
+        }
+    }
+}
+
 class ContentTest {
     private val dir: File = Files.createTempDirectory("syncvr").toFile()
     private val bytes = ByteArray(1000) { (it * 7).toByte() }
@@ -152,5 +171,36 @@ class ContentTest {
         } finally {
             server.stop(0)
         }
+    }
+
+    @Test fun abortUnblocksReadAndKeepsPart() {
+        val store = ContentStore(dir, BlockingHttp())
+        var cancel = false
+        val done = java.util.concurrent.CountDownLatch(1)
+        var result: SyncResult? = null
+        Thread {
+            result = store.sync(listOf(file()), false, null, { cancel }) { _, _, _ -> }
+            done.countDown()
+        }.start()
+        Thread.sleep(300) // let the worker block in read()
+        assertFalse(done.await(100, java.util.concurrent.TimeUnit.MILLISECONDS))
+        cancel = true
+        store.abort()
+        assertTrue(done.await(2, java.util.concurrent.TimeUnit.SECONDS))
+        assertEquals(emptyList(), result!!.failed)
+        assertTrue(File(dir, "a.mp4.part").isFile)
+    }
+
+    @Test fun secondSyncAbortsBlockedFirst() {
+        val mgr = ContentManager(ContentStore(dir, BlockingHttp()))
+        val msg = ServerMessage(type = "sync_content", files = listOf(file()))
+        mgr.handle(msg)
+        Thread.sleep(300)
+        mgr.handle(msg)
+        val deadline = System.currentTimeMillis() + 2000
+        while (mgr.outbox.size < 2 && System.currentTimeMillis() < deadline) Thread.sleep(10)
+        assertTrue(mgr.outbox.toList().any { it.contains("downloads_finished") && it.contains("\"cancelled\":true") })
+        assertTrue(File(dir, "a.mp4.part").isFile)
+        mgr.handle(ServerMessage(type = "cancel_downloads"))
     }
 }

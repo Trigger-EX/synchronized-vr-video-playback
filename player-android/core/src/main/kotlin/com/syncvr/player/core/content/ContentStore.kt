@@ -21,8 +21,15 @@ class ContentStore(
     private val http: HttpFetcher = JavaHttpFetcher,
     private val log: (String) -> Unit = {},
 ) {
+    @Volatile private var active: java.io.Closeable? = null
+
     init {
         folder.mkdirs()
+    }
+
+    /** Closes the in-flight HTTP response (if any) so a blocked read fails immediately. */
+    fun abort() {
+        try { active?.close() } catch (_: Exception) {}
     }
 
     fun pathFor(name: String): File? {
@@ -134,7 +141,9 @@ class ContentStore(
         }
         progress(name, have, f.size)
         if (have < f.size) {
-            http.get(url, have).use { resp ->
+            val resp0 = http.get(url, have)
+            active = resp0
+            try { resp0.use { resp ->
                 val partial = resp.status == 206
                 if (resp.status != 200 && !partial) {
                     if (resp.status == 416) tryDelete(part)
@@ -145,7 +154,12 @@ class ContentStore(
                     java.io.FileOutputStream(part, partial).use { out ->
                         val buf = ByteArray(256 * 1024)
                         while (true) {
-                            val n = input.read(buf)
+                            val n = try {
+                                input.read(buf)
+                            } catch (e: IOException) {
+                                if (cancelled()) throw DownloadCancelled()
+                                throw e
+                            }
                             if (n <= 0) break
                             if (cancelled()) throw DownloadCancelled()
                             out.write(buf, 0, n)
@@ -154,6 +168,8 @@ class ContentStore(
                         }
                     }
                 }
+            } } finally {
+                active = null
             }
         }
         if (have != f.size) throw IOException("got $have bytes, expected ${f.size}")

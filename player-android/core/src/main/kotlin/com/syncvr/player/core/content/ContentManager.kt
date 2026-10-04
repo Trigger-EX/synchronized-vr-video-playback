@@ -45,7 +45,10 @@ class ContentManager(
     fun handle(m: ServerMessage): Boolean {
         when (m.type) {
             "sync_content" -> startSync(m)
-            "cancel_downloads" -> generation.incrementAndGet()
+            "cancel_downloads" -> {
+                generation.incrementAndGet()
+                store.abort()
+            }
             "delete_content" -> {
                 for (name in store.delete(m.names, inUse())) onWarning("not deleting $name: it is loaded")
                 outbox.add(inventoryJson())
@@ -64,6 +67,7 @@ class ContentManager(
             return
         }
         val gen = generation.incrementAndGet()
+        store.abort()
         val previous = synchronized(lock) { worker }
         val t = Thread({
             previous?.join()
