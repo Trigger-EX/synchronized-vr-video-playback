@@ -8,13 +8,10 @@ from PySide6.QtWidgets import (QCheckBox, QComboBox, QDialog, QFrame, QHBoxLayou
                                QProgressBar, QPushButton, QScrollArea, QVBoxLayout, QWidget, QFormLayout, QLineEdit)
 
 from . import format as fmt
+from .theme import SEVERITY_COLORS, mark, set_property, state_style
 
 CARD_WIDTH = 270
 SPACING = 8
-SEVERITY_COLORS = {"poor": "#d0342c", "meh": "#c27c0e", "good": "#2e9d4a"}
-STATE_COLORS = {"playing": "#2e9d4a", "paused": "#c27c0e", "error": "#d0342c", "offline": "#7a7f87",
-                "connecting": "#7a7f87"}
-DEFAULT_STATE_COLOR = "#3b6fb6"
 
 
 def colored(text: str, severity: str = "") -> str:
@@ -100,10 +97,13 @@ class DeviceCard(QFrame):
         self.setObjectName("card")
 
         self.name_label = QLabel()
-        self.name_label.setStyleSheet("font-weight: bold")
+        self.name_label.setObjectName("cardName")
         self.group_label = QLabel()
+        self.group_label.setObjectName("chip")
         self.player_label = QLabel()
+        self.player_label.setObjectName("chip")
         self.edit_button = QPushButton("Edit")
+        mark(self.edit_button, small=True)
         self.edit_button.setCursor(Qt.ArrowCursor)
         self.edit_button.clicked.connect(lambda _c=False: self.edit_requested.emit(self.device_id))
         head = QHBoxLayout()
@@ -113,7 +113,9 @@ class DeviceCard(QFrame):
         head.addWidget(self.edit_button)
 
         self.state_label = QLabel()
+        self.state_label.setObjectName("badge")
         self.video_label = QLabel()
+        self.video_label.setObjectName("muted")
         self.video_label.setTextFormat(Qt.PlainText)
         state_row = QHBoxLayout()
         state_row.addWidget(self.state_label)
@@ -129,16 +131,23 @@ class DeviceCard(QFrame):
         self.download_bar = self._bar()
         self.error_label = QLabel()
         self.error_label.setWordWrap(True)
-        self.error_label.setStyleSheet("color: %s" % SEVERITY_COLORS["poor"])
+        self.error_label.setObjectName("error")
         self.seen_label = QLabel()
+        self.seen_label.setObjectName("muted")
+        self.download_label.setObjectName("muted")
+        self.download_bar.setProperty("download", "true")
+        self.time_label.setObjectName("time")
 
         lay = QVBoxLayout(self)
+        lay.setContentsMargins(12, 10, 12, 10)
+        lay.setSpacing(6)
         lay.addLayout(head)
         lay.addLayout(state_row)
         for w in (self.position_bar, self.time_label, self.info_label, self.download_label, self.download_bar,
                   self.error_label, self.seen_label):
             lay.addWidget(w)
         self._selected = None
+        mark(self, online=True)
         self.set_selected(False)
 
     @staticmethod
@@ -158,7 +167,7 @@ class DeviceCard(QFrame):
         if selected == self._selected:
             return
         self._selected = selected
-        self.setStyleSheet("#card { border: 2px solid %s; }" % ("#3b6fb6" if selected else "transparent"))
+        set_property(self, "selected", selected)
 
     def update_device(self, dev: dict, library: list) -> None:
         st = dev.get("status") or {}
@@ -172,8 +181,8 @@ class DeviceCard(QFrame):
         self.player_label.setToolTip("Player app")
         name = fmt.state_name(dev)
         self.state_label.setText(name)
-        self.state_label.setStyleSheet("color: white; border-radius: 3px; padding: 1px 6px; background: %s"
-                                       % STATE_COLORS.get(name, DEFAULT_STATE_COLOR))
+        set_property(self.state_label, "state", state_style(name))
+        set_property(self, "online", online)
         self.video_label.setText(st.get("video") or "")
 
         pos, dur = st.get("position"), st.get("duration")
@@ -221,6 +230,7 @@ class EditDialog(QDialog):
         bits = [dev["id"], dev.get("model"), dev.get("ip"), dev.get("player") and dev["player"] + " player",
                 dev.get("app_version") and "app " + dev["app_version"]]
         self.id_label = QLabel(" · ".join(b for b in bits if b))
+        self.id_label.setObjectName("muted")
         self.name_edit = QLineEdit(dev.get("name") or "")
         self.name_edit.setMaxLength(64)
         self.name_edit.setPlaceholderText("e.g. Seat 12")
@@ -231,8 +241,10 @@ class EditDialog(QDialog):
         self.group_edit.lineEdit().setMaxLength(64)
         self.save_button = QPushButton("Save")
         self.save_button.setDefault(True)
+        self.save_button.setProperty("primary", "true")
         self.cancel_button = QPushButton("Cancel")
         self.forget_button = QPushButton("Forget")
+        self.forget_button.setProperty("danger", "true")
         self.forget_button.setVisible(not dev.get("online"))
         self.save_button.clicked.connect(lambda _c=False: self._finish("save"))
         self.cancel_button.clicked.connect(lambda _c=False: self._finish("cancel"))
@@ -281,6 +293,7 @@ class HeadsetsTab(QWidget):
         bar.addWidget(self.downloads_label)
 
         self.flow = FlowLayout()
+        self.flow.setContentsMargins(0, 8, 0, 8)
         self.container = QWidget()
         self.container.setLayout(self.flow)
         scroll = QScrollArea()
@@ -289,6 +302,8 @@ class HeadsetsTab(QWidget):
         self.empty_label = QLabel("No headsets yet. Start the SyncVR player app on a headset connected to the "
                                   "same network, or run `python -m syncvr sim` to try it with simulated headsets.")
         self.empty_label.setWordWrap(True)
+        self.empty_label.setObjectName("muted")
+        self.downloads_label.setObjectName("muted")
         lay = QVBoxLayout(self)
         lay.addLayout(bar)
         lay.addWidget(self.empty_label)

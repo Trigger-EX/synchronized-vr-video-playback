@@ -8,10 +8,15 @@ from PySide6.QtWidgets import QApplication, QMessageBox
 
 from .bridge import Bridge
 from .main_window import MainWindow
+from .theme import apply_theme
 
 
 def _app() -> QApplication:
-    return QApplication.instance() or QApplication([])
+    app = QApplication.instance()
+    if app is None:
+        app = QApplication([])
+        apply_theme(app)
+    return app
 
 
 def show_error(title: str, message: str) -> None:

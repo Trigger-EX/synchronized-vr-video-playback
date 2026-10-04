@@ -6,6 +6,7 @@ from PySide6.QtWidgets import (QAbstractItemView, QComboBox, QHBoxLayout, QHeade
                                QSpinBox, QStyledItemDelegate, QTableView, QVBoxLayout, QWidget)
 
 from . import format as fmt
+from .theme import LEVEL_COLORS
 
 COLUMNS = ("Title", "File", "Checks", "Length", "Size", "Projection", "Stereo", "Yaw°", "Loop", "On headsets")
 TITLE, FILE, CHECKS, LENGTH, SIZE, PROJECTION, STEREO, ROTATION, LOOP, ON_HEADSETS = range(len(COLUMNS))
@@ -13,7 +14,7 @@ FIELDS = {TITLE: "title", PROJECTION: "projection", STEREO: "stereo", ROTATION: 
 PROJECTIONS = (("360", "360°"), ("180", "180°"), ("flat", "Flat screen"))
 STEREO_MODES = (("mono", "Mono"), ("tb", "3D top/bottom"), ("sbs", "3D side-by-side"))
 CHOICES = {PROJECTION: PROJECTIONS, STEREO: STEREO_MODES}
-CHECK_COLORS = {"ok": "#2e9d4a", "info": "#3b6fb6", "warn": "#c27c0e", "error": "#d0342c", "pending": "#7a7f87"}
+CHECK_COLORS = LEVEL_COLORS
 
 
 class LibraryModel(QAbstractTableModel):
@@ -69,7 +70,7 @@ class LibraryModel(QAbstractTableModel):
         if role == Qt.ToolTipRole:
             return self._tooltip(v, col)
         if role == Qt.ForegroundRole and col == CHECKS:
-            return QBrush(QColor(CHECK_COLORS.get(fmt.issues_summary(v)[1], "#000000")))
+            return QBrush(QColor(CHECK_COLORS.get(fmt.issues_summary(v)[1], "#e6eaef")))
         return None
 
     @staticmethod
@@ -191,6 +192,8 @@ class LibraryTab(QWidget):
         self.rescan_button.clicked.connect(lambda _c=False: window.bridge.rescan())
         self.empty_label = QLabel("The content folder is empty.")
         hint = QLabel("Put video files in the server's content folder. Changes here apply the next time a video is loaded.")
+        hint.setObjectName("muted")
+        self.empty_label.setObjectName("muted")
         bar = QHBoxLayout()
         bar.addWidget(self.rescan_button)
         bar.addWidget(hint, 1)

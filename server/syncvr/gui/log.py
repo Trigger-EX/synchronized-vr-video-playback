@@ -5,7 +5,8 @@ import time
 from PySide6.QtGui import QBrush, QColor
 from PySide6.QtWidgets import QListWidget, QListWidgetItem, QVBoxLayout, QWidget
 
-LEVEL_COLORS = {"error": "#d0342c", "warn": "#c27c0e"}
+from .theme import LEVEL_COLORS
+
 
 
 def event_text(event: dict, names: dict) -> str:
@@ -38,7 +39,7 @@ class LogTab(QWidget):
         self.list.clear()
         for ev in reversed(events):
             item = QListWidgetItem(event_text(ev, names))
-            color = LEVEL_COLORS.get(ev.get("level"))
+            color = LEVEL_COLORS.get(ev.get("level")) if ev.get("level") in ("error", "warn") else None
             if color:
                 item.setForeground(QBrush(QColor(color)))
             self.list.addItem(item)

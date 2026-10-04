@@ -4,7 +4,8 @@ import time
 from pathlib import Path
 
 from PySide6.QtGui import QAction
-from PySide6.QtWidgets import QFileDialog, QLabel, QMainWindow, QMessageBox, QTabWidget, QVBoxLayout, QWidget
+from PySide6.QtWidgets import (QFileDialog, QFrame, QHBoxLayout, QLabel, QMainWindow, QMessageBox, QTabWidget,
+                               QVBoxLayout, QWidget)
 
 from ..launcher import open_path, save_override
 from . import format as fmt
@@ -13,6 +14,7 @@ from .library import LibraryTab
 from .log import LogTab
 from .playback import PlaybackPanel
 from .settings import SettingsTab
+from .theme import set_property
 
 TABS = ("Headsets", "Library", "Settings", "Log")
 STATUS_MS = 5000
@@ -38,10 +40,36 @@ class MainWindow(QMainWindow):
         for name in TABS:
             self.tabs.addTab(self.tab_widgets[name], name)
         self.playback = PlaybackPanel(self)
-        central = QWidget()
-        lay = QVBoxLayout(central)
+        self.stats_label = QLabel("Starting...")
+        self.stats_label.setObjectName("stats")
+        self.server_label = QLabel("")
+        self.server_label.setObjectName("serverName")
+        self.conn_label = QLabel("connecting…")
+        self.conn_label.setObjectName("conn")
+        set_property(self.conn_label, "ok", False)
+        header = QFrame()
+        header.setObjectName("topbar")
+        head = QHBoxLayout(header)
+        head.setContentsMargins(16, 10, 16, 10)
+        head.setSpacing(14)
+        brand = QLabel("SyncVR")
+        brand.setObjectName("brand")
+        for w in (brand, self.server_label):
+            head.addWidget(w)
+        head.addWidget(self.stats_label, 1)
+        head.addWidget(self.conn_label)
+        body = QWidget()
+        lay = QVBoxLayout(body)
+        lay.setContentsMargins(16, 8, 16, 12)
+        lay.setSpacing(12)
         lay.addWidget(self.tabs, 1)
         lay.addWidget(self.playback)
+        central = QWidget()
+        outer = QVBoxLayout(central)
+        outer.setContentsMargins(0, 0, 0, 0)
+        outer.setSpacing(0)
+        outer.addWidget(header)
+        outer.addWidget(body, 1)
         self.setCentralWidget(central)
 
         file_menu = self.menuBar().addMenu("&File")
@@ -54,10 +82,9 @@ class MainWindow(QMainWindow):
             file_menu.addAction(act)
 
         bar = self.statusBar()
-        self.stats_label = QLabel("Starting...")
         self.downloads_label = QLabel("")
         self.address_label = QLabel("")
-        bar.addWidget(self.stats_label, 1)
+        bar.addWidget(QLabel(""), 1)
         bar.addPermanentWidget(self.downloads_label)
         bar.addPermanentWidget(self.address_label)
 
@@ -106,6 +133,9 @@ class MainWindow(QMainWindow):
         if st["worst_drift"] is not None:
             text += " · worst drift %.0f ms" % st["worst_drift"]
         self.stats_label.setText(text)
+        self.server_label.setText((snap.get("server") or {}).get("name") or "")
+        self.conn_label.setText("live")
+        set_property(self.conn_label, "ok", True)
         dl = snap.get("downloads") or {}
         active, queued = len(dl.get("active") or []), len(dl.get("queued") or [])
         self.downloads_label.setText("Downloading to %d, %d waiting" % (active, queued) if active or queued else "")
@@ -125,6 +155,8 @@ class MainWindow(QMainWindow):
 
     def on_stopped(self) -> None:
         self.stats_label.setText("The server stopped. See the log for details.")
+        self.conn_label.setText("stopped")
+        set_property(self.conn_label, "ok", False)
 
     def closeEvent(self, event) -> None:
         self.bridge.close()

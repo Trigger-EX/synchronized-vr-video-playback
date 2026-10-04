@@ -22,12 +22,16 @@ class PlaybackPanel(QWidget):
         self._updating = False
 
         self.target_label = QLabel("")
+        self.target_label.setObjectName("target")
         self.video_combo = QComboBox()
         self.video_combo.setMinimumWidth(240)
         self.video_combo.activated.connect(lambda _i: setattr(self, "_video_touched", True))
         self.now_playing = QLabel("Nothing loaded")
+        self.now_playing.setObjectName("now")
         self.pos_label = QLabel("0:00")
+        self.pos_label.setObjectName("time")
         self.dur_label = QLabel("0:00")
+        self.dur_label.setObjectName("time")
         self.seek = QSlider(Qt.Horizontal)
         self.seek.setRange(0, SEEK_RANGE)
         self.seek.sliderPressed.connect(lambda: setattr(self, "_seek_dragging", True))
@@ -85,7 +89,8 @@ class PlaybackPanel(QWidget):
         seek_row.addWidget(self.seek, 1, 1)
         seek_row.addWidget(self.dur_label, 1, 2)
 
-        box = QGroupBox("Playback")
+        box = QGroupBox("PLAYBACK")
+        box.setObjectName("playback")
         lay = QVBoxLayout(box)
         for part in (top, seek_row, transport, extras, content):
             lay.addLayout(part)
@@ -103,6 +108,10 @@ class PlaybackPanel(QWidget):
         b = QPushButton(text)
         b.clicked.connect(lambda _checked=False: handler())
         self.buttons[key] = b
+        if key == "play":
+            b.setProperty("primary", "true")
+        elif key == "delete":
+            b.setProperty("danger", "true")
         return b
 
     # ------------------------------------------------------------ commands
