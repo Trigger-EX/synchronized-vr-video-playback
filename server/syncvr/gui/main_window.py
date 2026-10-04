@@ -5,7 +5,7 @@ from pathlib import Path
 
 from PySide6.QtCore import Qt, QTimer
 from PySide6.QtGui import QAction
-from PySide6.QtWidgets import (QFileDialog, QFrame, QHBoxLayout, QLabel, QMainWindow, QMessageBox, QTabWidget,
+from PySide6.QtWidgets import (QFileDialog, QFrame, QHBoxLayout, QLabel, QMainWindow, QMessageBox, QScrollArea, QSizePolicy, QTabWidget,
                                QVBoxLayout, QWidget)
 
 from ..launcher import load_overrides, open_path, save_override
@@ -46,6 +46,7 @@ class MainWindow(QMainWindow):
         self.addDockWidget(Qt.RightDockWidgetArea, self.view_pane)
         self.view_pane.visibilityChanged.connect(lambda vis: vis or self.close_view())
         self.resize(1100, 760)
+        self.setMinimumSize(560, 360)
 
         self.tabs = QTabWidget()
         self.headsets = HeadsetsTab(self)
@@ -78,7 +79,16 @@ class MainWindow(QMainWindow):
         lay.setContentsMargins(16, 8, 16, 12)
         lay.setSpacing(12)
         lay.addWidget(self.tabs, 1)
-        lay.addWidget(self.playback)
+        # Playback sits in a scroll area so a short window can still reach every control.
+        play_scroll = QScrollArea()
+        play_scroll.setWidgetResizable(True)
+        play_scroll.setFrameShape(QFrame.NoFrame)
+        play_scroll.setWidget(self.playback)
+        play_scroll.setMinimumHeight(110)
+        play_scroll.setMaximumHeight(max(self.playback.sizeHint().height() + 4, 110))
+        play_scroll.setSizePolicy(play_scroll.sizePolicy().horizontalPolicy(), QSizePolicy.Preferred)
+        self.tabs.setMinimumHeight(120)
+        lay.addWidget(play_scroll)
         central = QWidget()
         outer = QVBoxLayout(central)
         outer.setContentsMargins(0, 0, 0, 0)
