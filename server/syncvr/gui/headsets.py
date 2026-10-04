@@ -4,7 +4,7 @@ import time
 from html import escape
 
 from PySide6.QtCore import QPoint, QRect, QSize, Qt, Signal
-from PySide6.QtWidgets import (QCheckBox, QComboBox, QDialog, QFrame, QHBoxLayout, QLabel, QLayout, QMessageBox,
+from PySide6.QtWidgets import (QCheckBox, QMenu, QComboBox, QDialog, QFrame, QHBoxLayout, QLabel, QLayout, QMessageBox,
                                QProgressBar, QPushButton, QScrollArea, QVBoxLayout, QWidget, QFormLayout, QLineEdit)
 
 from . import format as fmt
@@ -87,6 +87,7 @@ class FlowLayout(QLayout):
 class DeviceCard(QFrame):
     clicked = Signal(str)
     edit_requested = Signal(str)
+    view_requested = Signal(str)
 
     def __init__(self, device_id: str):
         super().__init__()
@@ -106,10 +107,16 @@ class DeviceCard(QFrame):
         mark(self.edit_button, small=True)
         self.edit_button.setCursor(Qt.ArrowCursor)
         self.edit_button.clicked.connect(lambda _c=False: self.edit_requested.emit(self.device_id))
+        self.view_button = QPushButton("View")
+        mark(self.view_button, small=True)
+        self.view_button.setCursor(Qt.ArrowCursor)
+        self.view_button.setToolTip("Mirror this headset's screen (adb + scrcpy)")
+        self.view_button.clicked.connect(lambda _c=False: self.view_requested.emit(self.device_id))
         head = QHBoxLayout()
         for w in (self.name_label, self.group_label, self.player_label):
             head.addWidget(w)
         head.addStretch(1)
+        head.addWidget(self.view_button)
         head.addWidget(self.edit_button)
 
         self.state_label = QLabel()
@@ -183,6 +190,7 @@ class DeviceCard(QFrame):
         self.state_label.setText(name)
         set_property(self.state_label, "state", state_style(name))
         set_property(self, "online", online)
+        self.view_button.setEnabled(online)
         self.video_label.setText(st.get("video") or "")
 
         pos, dur = st.get("position"), st.get("duration")
@@ -351,6 +359,7 @@ class HeadsetsTab(QWidget):
                 card = self.cards[dev["id"]] = DeviceCard(dev["id"])
                 card.clicked.connect(self.toggle)
                 card.edit_requested.connect(self.open_edit)
+                card.view_requested.connect(self._window.view_headset)
                 self.flow.addWidget(card)
             card.update_device(dev, library)
         shown = self.visible_devices()
@@ -377,6 +386,17 @@ class HeadsetsTab(QWidget):
         idx = self.group_filter.findData(current)
         self.group_filter.setCurrentIndex(idx if idx >= 0 else 0)
         self.group_filter.blockSignals(False)
+
+    def contextMenuEvent(self, event) -> None:
+        card = next((c for c in self.cards.values() if c.isVisible()
+                     and c.rect().contains(c.mapFromGlobal(event.globalPos()))), None)
+        if card is None:
+            return
+        menu = QMenu(self)
+        act = menu.addAction("View headset (scrcpy)...")
+        act.setEnabled(card.view_button.isEnabled())
+        act.triggered.connect(lambda _c=False, i=card.device_id: self._window.view_headset(i))
+        menu.exec(event.globalPos())
 
     # ---------------------------------------------------------------- edit
 

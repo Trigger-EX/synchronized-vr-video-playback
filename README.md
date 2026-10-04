@@ -118,6 +118,14 @@ Without PySide6 or a display it runs in the terminal instead (`SYNCVR_NO_VENV=1`
 second time while port 8080 is taken shows a message and exits. Optional settings go in
 `server/data/launcher.json` (`content`, `http_port`, `name`, `password`).
 
+## Viewing a headset
+
+Select **View** on a headset card (or right-click it, or **File > View selected headset**) to dock a live mirror of its screen in a pane on the right of the window (selecting another headset switches it; View again closes it). On Wayland and macOS the mirror opens as a separate scrcpy window instead. This uses `adb` and `scrcpy`, which you install separately because they are GPL and large (Linux: `sudo apt install adb scrcpy`; Windows: extract the scrcpy release zip, which includes adb, next to `SyncVR.exe` or onto PATH, or point to it with **File > Set scrcpy/adb folder...**; macOS: `brew install scrcpy android-platform-tools`).
+
+One-time setup per headset: enable developer mode, connect it by USB and run `adb tcpip 5555` so it listens over Wi-Fi. SyncVR then runs `adb connect <ip>:5555` and `scrcpy` for you.
+
+Caveat: whether the VR picture shows up (rather than a black or 2D shell view) depends on the Oculus Go and its player.
+
 ## Network and content recommendations
 
 * **Use a dedicated router** that you bring to the venue. Turn off *AP/client isolation*

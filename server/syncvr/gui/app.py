@@ -6,7 +6,9 @@ from pathlib import Path
 from PySide6.QtCore import QLockFile, QTimer
 from PySide6.QtWidgets import QApplication, QMessageBox
 
+from ..launcher import load_overrides
 from .bridge import Bridge
+from .mirror import MirrorManager
 from .main_window import MainWindow
 from .theme import apply_theme
 
@@ -51,7 +53,9 @@ def self_test(thread, config, log_path: Path, timeout_ms: int = 15000) -> bool:
 def run_window(thread, config, log_path: Path) -> None:
     app = _app()
     bridge = Bridge(thread)
-    win = MainWindow(bridge, config, log_path)
+    mirror = MirrorManager(tools_dir=load_overrides(config.data_dir).get("tools_dir", ""))
+    win = MainWindow(bridge, config, log_path, mirror)
+    app.aboutToQuit.connect(mirror.stop_all)
     signal.signal(signal.SIGINT, lambda *_: app.quit())
     keepalive = QTimer()  # lets the interpreter run so Ctrl+C is noticed
     keepalive.start(200)
@@ -59,5 +63,6 @@ def run_window(thread, config, log_path: Path) -> None:
     bridge.start()
     win.show()
     app.exec()
+    mirror.stop_all()
     bridge.close()
     thread.stop(5)
