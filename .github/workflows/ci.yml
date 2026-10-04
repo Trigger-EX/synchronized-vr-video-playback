@@ -2,6 +2,7 @@ name: CI
 
 on:
   push:
+    branches-ignore: ["apk/**"]
   pull_request:
 
 jobs:
@@ -35,6 +36,8 @@ jobs:
 
   player-android:
     runs-on: ubuntu-latest
+    permissions:
+      contents: write # publishes the APK to apk/<branch>
     defaults:
       run:
         working-directory: player-android
@@ -79,3 +82,31 @@ jobs:
           name: SyncVRPlayer-apk
           path: player-android/SyncVRPlayer.apk
           if-no-files-found: error
+      # Force-pushes a one-commit branch apk/<branch> holding the APK, so it can be fetched with
+      # git (player-android/tools/get-apk.sh). Skipped if the branch moved on during this run.
+      - name: Publish APK to apk/<branch>
+        if: github.event_name == 'push' && github.ref_type == 'branch'
+        env:
+          TOKEN: ${{ github.token }}
+        run: |
+          remote="https://x-access-token:${TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
+          head=$(git ls-remote "$remote" "refs/heads/${GITHUB_REF_NAME}" | cut -f1)
+          if [ "$head" != "$GITHUB_SHA" ]; then
+            echo "Branch moved on to $head; not publishing this older build."
+            exit 0
+          fi
+          out="$RUNNER_TEMP/apk-publish"
+          mkdir -p "$out"
+          cp SyncVRPlayer.apk "$out/"
+          cd "$out"
+          {
+            echo "branch: ${GITHUB_REF_NAME}"
+            echo "commit: ${GITHUB_SHA}"
+            echo "built: $(date -u +%Y-%m-%dT%H:%M:%SZ)"
+            echo "run: ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
+          } > BUILD.txt
+          git init -q
+          git add SyncVRPlayer.apk BUILD.txt
+          git -c user.name="github-actions[bot]" -c user.email="41898282+github-actions[bot]@users.noreply.github.com" \
+            commit -q -m "SyncVRPlayer.apk from ${GITHUB_REF_NAME}@${GITHUB_SHA::7}"
+          git push -q -f "$remote" "HEAD:refs/heads/apk/${GITHUB_REF_NAME}"

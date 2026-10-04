@@ -12,11 +12,27 @@ the only app that can run a synced show is the Unity one, described in
 
 ## Getting the APK
 
-Nothing needs building on your machine. GitHub Actions builds and signs the APK on every push.
+Nothing needs building on your machine. GitHub Actions builds and signs the APK on every push
+and publishes it to the git branch `apk/<branch>` (one commit, replaced on each build).
 
-1. Open the repository on GitHub → **Actions** → the latest green **CI** run on the branch.
-2. Under **Artifacts**, download **SyncVRPlayer-apk**. It's a zip; unzip it to get
-   `SyncVRPlayer.apk`.
+With git, once per clone, add an alias:
+
+```sh
+git config alias.apk '!player-android/tools/get-apk.sh'
+```
+
+Then, after each push has gone green, from your checkout of the branch:
+
+```sh
+git pull
+git apk              # writes ./SyncVRPlayer.apk (repo root) and prints which commit it was built from
+git apk --install    # same, then adb install -r onto the connected headset
+git apk main         # the APK of another branch
+```
+
+If the branch has commits newer than the published APK, `git apk` says so (CI still running or
+failed). Without git: on GitHub → **Actions** → the latest green **CI** run on the branch →
+**Artifacts** → **SyncVRPlayer-apk** (a zip containing `SyncVRPlayer.apk`).
 
 Every build is signed with the same key (stored in the repository secrets), so a newer APK
 installs over an older one without losing videos.
