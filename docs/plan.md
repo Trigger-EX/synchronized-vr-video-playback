@@ -1,35 +1,34 @@
-# Plan: kiosk restore, resume after server restart, dashboard warning, Unity cleanup, player retry
+# Plan: headset panel edges, Android operator app, PC launcher
 
-Earlier work (single-port downloads, pending-download persistence, `adb kiosk`) is in git history.
+Dashboard API lives in `server/syncvr/web.py`; static UI in `server/syncvr/web/`. Three independent tasks, no shared files.
 
-Hardware finding: `kiosk off` printed ok but `pm list packages -d` still listed com.oculus.vrshell, and the HOME resolve still returned com.syncvr.player/.MainActivity (user chose SyncVR + "Always" in the chooser). vrshell HOME = com.oculus.vrshell/.MainActivity.
+## A. Headset panel edges
+Cause: the panel is a 1024x256 Android-surface swapchain drawn by `PanelRenderer.kt` and shown as an opaque cylinder layer with `CLIP_TO_TEXTURE_RECT` (layers.cpp, app.cpp). The box outline is the hard clip boundary, which the compositor redraws without anti-aliasing every frame. The small panel is minified about 3x with no mipmaps, so the 4 px border and thin strokes shimmer. Colour fringes through the lenses are likely too.
+Fix:
+1. `core/.../PanelStyle.kt` (pure Kotlin): texture size, transparent margin (~8% per side), corner radius, border width, text sizes; helper `texelsPerDisplayPixel(widthM, radiusM, texW, pxPerDeg = 14.0)`. Test `PanelStyleTest.kt`: ratio <= 2.0 for small (1.2 m) and prominent (2.4 m) placements, margin >= 2 texels.
+2. `PanelRenderer.kt`: clear to transparent, anti-aliased rounded rect with soft edge inside the margin, border >= 6 px, sizes from PanelStyle.
+3. `app.cpp`: panel 768x192 (or per PanelStyle), `opaque=false`; keep a `kPanelAlpha` constant to switch back.
+4. `layers.cpp/.h`: non-opaque layers use premultiplied blend (SRC=ONE, DST=ONE_MINUS_SRC_ALPHA); add chromatic aberration correction flag on the panel layer only (check name in VrApi_Types.h, `#ifdef`). Keep CLIP_TO_TEXTURE_RECT.
+Risks: surface may lack alpha (margin shows black); CA costs compositor time; cannot compile here, CI builds, only the headset confirms the look.
 
-## 1. Kiosk (APK + adbtool)
-- Manifest: move the HOME filter to `activity-alias .HomeAlias` (disabled by default). Add exported `KioskReceiver` with `android:permission="android.permission.DUMP"` (shell has it, apps don't).
-- `KioskReceiver.kt`: `--ez on true` enables the alias; `false` disables it and calls `clearPackagePreferredActivities(packageName)`. Not `pm clear` (would wipe config.json).
-- adbtool `on`: disable vrshell, send broadcast, `set-home-activity .../.HomeAlias` best effort, verify.
-- adbtool `off`: `pm enable com.oculus.vrshell`; if `pm list packages -d` still lists it, retry `pm enable --user 0`; fail loudly if still disabled. Then broadcast off, `set-home-activity com.oculus.vrshell/.MainActivity`, verify, `am start -a MAIN -c HOME`.
-- New `kiosk restore [--root]`: `off` plus `pm unhide`; with root also `adb root` + `pm enable`.
-- Verify with `cmd package resolve-activity --brief -a MAIN -c HOME` (no package). `ResolverActivity` or a non-vrshell result means failure; print the next command to run.
-- Tests in `server/tests/test_adbtool.py`; update `docs/HEADSET_SETUP.md`.
-- Risks: existing "Always" entry points at MainActivity (`restore` clears it); DUMP must be granted to shell on the Go.
+## B. Android operator app (native, no WebView)
+Separate module `player-android/operator` (applicationId `com.syncvr.operator`, minSdk 24, phone/tablet, no native code).
+API (HTTP Basic auth if a password is set): discovery by UDP 8766 beacon `{type:"beacon", service:"syncvr", server_name, tcp_port, http_port}` (host = datagram sender) with manual IP:port fallback; `GET /api/state` (server, settings, devices, library, downloads, events); `POST /api/command {action, targets, ...}` with actions load, play, pause, seek, stop, resync, volume, recenter, message, identify, sync_content, delete_content, cancel_downloads; `POST /api/devices/{id}`, `DELETE /api/devices/{id}`, `POST /api/library/rescan`. v1 polls `/api/state` every 1 s in the foreground (no WebSocket client).
+Steps:
+1. Logic in `core/src/main/kotlin/com/syncvr/player/core/operator/`: `OperatorApi.kt` (HttpTransport + HttpURLConnection impl), `StateModel.kt`, `ServerFinder.kt`, `OperatorViewModel.kt`.
+2. Tests in `core/src/test/.../operator/`: snapshot parse, command bodies, auth header, beacon matching, end-to-end against the Python server (pattern of e2e/EndToEndTest.kt).
+3. `operator/build.gradle.kts` (same signing/versionCode as app, no cmake, framework widgets only), manifest (INTERNET, ACCESS_WIFI_STATE, CHANGE_WIFI_MULTICAST_STATE, usesCleartextTraffic), `MainActivity.kt` (connect), `DashboardActivity.kt` (devices, transport, library/distribution, events), `MulticastLockGuard` copy.
+4. `settings.gradle.kts`: `include(":operator")` inside the hasAndroidSdk block.
+5. `ci.yml`: build `:app:assembleRelease :operator:assembleRelease`, publish `SyncVROperator.apk` with apksigner verify, add to apk/<branch>.
+6. `tools/get-apk.sh`: `--operator`; default flow unchanged; tolerate branches without the file. `.gitignore`, `docs/HEADSET_SETUP.md`.
 
-## 2. Resume after server restart
-Likely cause: `Distributor.check_idle` measures from job start, so a status without `download` for 20 s ends the job (player hashing existing files, or waiting on its old worker); the job leaves `pending_json` while the headset keeps downloading. Also `stop()` can block up to 60 s on in-flight downloads, and a second Ctrl+C skips the final save.
-- `controller.py`: keep idle jobs in an `idle` dict (persisted, not counted toward the limit); time idleness from the last status that had `download`; add a `job` id to `sync_content`, ignore `downloads_finished` with a different id (accept when missing: old APKs).
-- `app.py`: save before the first await in `stop()` and again in `finally`; `shutdown_timeout=2` on both AppRunners (aiohttp>=3.9 in pyproject.toml); SIGINT/SIGTERM via `add_signal_handler` (Unix only, guard).
-- `sim.py`: echo `job`; add `throttle_bps`.
-- Player: echo `job`; report progress while hashing (`ContentStore.ensure`). Document in `docs/PROTOCOL.md`.
-- Test in `test_integration.py`: 4 MB video, throttled sim; once `.part` grows, `wait_for(srv.stop(), 5)`; start a new server with same data_dir and tcp_port; assert identical bytes and two `sync_content`. Variant with short grace and slow `_verify`.
-
-## 3. No-headset warning
-`Controller.execute` adds `online` to the result and `warning` when no target is online for load/play/pause/seek/stop; empty target list raises `CommandError`. `web/app.js` toasts `result.warning`. Test in `test_integration.py`.
-
-## 4. Unity leftovers
-`controller.py` default `player` becomes `""` (not sent; update `test_integration.py` ~line 84). Reword `protocol.py` comment (~line 41), keep the `"external"` value. `PROTOCOL.md` ~lines 38, 76. Kotlin comments in PlayerInfo.kt, Lifecycle.kt, Telemetry.kt, ContentStore.kt, ContentHost.kt, ExoVideoPlayer.kt. Leave `docs/*_PLAN.md`.
-
-## 5. Player retry
-`ContentStore` throws `ChecksumMismatch`; `SyncResult` gains `retryable` (not 4xx, not checksum). `ContentManager.run` retries after 5/15/30 s with an injected sleep; waits on the lock, wakes on generation change, keeps `current` set while waiting. Test in `ContentTest.kt`.
+## C. PC control panel launcher
+tkinter window (stdlib) running the server in a background thread, opening the browser once. A second launch with port 8080 in use opens the browser and exits.
+1. `server/syncvr/launcher.py`: `ServerThread` (own loop, start waits for ready, stop(timeout=5), snapshot via run_coroutine_threadsafe), pure `status_lines`, `port_in_use`, `setup_logging` (rotating `data/logs/syncvr.log`); Tk UI with 1 s refresh and buttons Open dashboard / Open content folder / Open log / Stop & quit; console fallback without tkinter; message box with "Install now" if aiohttp missing. Optional `data/launcher.json`.
+2. `__main__.py`: `gui` subcommand.
+3. Repo root: `Start SyncVR.desktop` (executable), `start-syncvr.sh`, `Start SyncVR.pyw`; README notes (Nemo "Trust and launch", WSL users use the .pyw from Windows).
+4. `server/tests/test_launcher.py`: ServerThread start/snapshot/stop < 5 s with port 0 and discovery off; status_lines; port_in_use; import without tkinter.
+Constraints: aiohttp 3.8 compatible (`runner_kwargs`), no signal handlers off the main thread, `controller.snapshot` only on the loop thread.
 
 ## Verify
-`(cd server && python3 -m pytest -q)` and `(cd player-android && ./gradlew --no-daemon :core:test)`. Hardware: `kiosk on` (no chooser), reboot, `kiosk off`, reboot to vrshell; Ctrl+C mid-download, check state.json has `downloads`, restart, download resumes.
+`(cd server && python3 -m pytest -q)`, `(cd player-android && ./gradlew --no-daemon :core:test)`, CI build; hands-on: headset panel while turning head, operator APK on a phone, double-click launcher on Mint.
