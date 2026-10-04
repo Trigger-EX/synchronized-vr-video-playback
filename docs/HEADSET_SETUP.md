@@ -79,6 +79,12 @@ Other commands: `install`, `configure`, `launch`, `stop`, `prox-off`, `prox-on`,
   The native player does **not** read this file yet: it always uses UDP broadcast discovery, so
   broadcast must reach the headsets (no client isolation; `serve --broadcast` for other subnets). The
   file only applies to the legacy Unity app.
+* **USB mode (no firewall rules).** `python3 -m syncvr adb launch --usb` (or `setup APK --usb`)
+  runs `adb reverse tcp:8765 tcp:8765` and `tcp:8080 tcp:8080` on each headset, then starts the app
+  with `--es server 127.0.0.1`, so the headset reaches the server through the USB cable and no
+  discovery or open ports are needed (the default ports only; the server must run on the machine
+  the headsets are plugged into). The reverse is lost on unplug or reboot: replug and rerun
+  `adb launch --usb`. Without `--usb` nothing changes (UDP discovery).
 
 Once connected, the player shows its name and connection state on a dark screen while idle. The
 dashboard shows `native` as the player type. Headsets use their Android serial number as their ID,

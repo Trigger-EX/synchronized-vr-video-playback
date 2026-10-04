@@ -23,6 +23,7 @@ from pathlib import Path
 from typing import List
 
 DEFAULT_PACKAGE = "com.syncvr.player"
+USB_PORTS = (8765, 8080)  # TCP control, HTTP content
 
 
 class Adb:
@@ -118,7 +119,15 @@ def run(args) -> int:
         return adb.run(s, "install", "-r", "-g", args.apk, timeout=600)
 
     def launch(s):
+        if getattr(args, "usb", False):
+            return launch_usb(s)
         return adb.shell(s, f"monkey -p {adb.package} -c android.intent.category.LAUNCHER 1 >/dev/null && echo launched")
+
+    def launch_usb(s):
+        for port in USB_PORTS:
+            adb.run(s, "reverse", f"tcp:{port}", f"tcp:{port}")
+        adb.shell(s, f"am start -n {adb.package}/.MainActivity --es server 127.0.0.1")
+        return "launched (USB, adb reverse)"
 
     def prox_off(s):
         # Keeps the headset awake and playing when nobody is wearing it (until reboot).
@@ -197,6 +206,9 @@ def run(args) -> int:
     raise AssertionError(cmd)
 
 
+USB_HELP = "reach the server over adb reverse (127.0.0.1; ports 8765, 8080), no firewall rules needed"
+
+
 def add_arguments(p: argparse.ArgumentParser) -> None:
     p.add_argument("--adb", default=os.environ.get("ADB", "adb"), help="path to adb")
     p.add_argument("--package", default=DEFAULT_PACKAGE, help="headset app package name")
@@ -209,6 +221,7 @@ def add_arguments(p: argparse.ArgumentParser) -> None:
     x.add_argument("apk")
     x.add_argument("--server", help="server IP to use instead of auto-discovery")
     x.add_argument("--server-name", help="only accept a discovered server with this name")
+    x.add_argument("--usb", action="store_true", help=USB_HELP)
     x.add_argument("--keep-proximity", action="store_true", help="leave the proximity sensor enabled")
     x = sub.add_parser("configure", help="write the headset config file")
     x.add_argument("--server", help="server IP (omit for auto-discovery)")
@@ -217,7 +230,8 @@ def add_arguments(p: argparse.ArgumentParser) -> None:
     x.add_argument("files", nargs="+")
     x.add_argument("--parallel", type=int, default=4, help="headsets to copy to at once")
     sub.add_parser("list", help="list video files on the headsets")
-    sub.add_parser("launch", help="start the player app")
+    x = sub.add_parser("launch", help="start the player app")
+    x.add_argument("--usb", action="store_true", help=USB_HELP)
     sub.add_parser("stop", help="force-stop the player app")
     sub.add_parser("prox-off", help="disable the proximity sensor until reboot")
     sub.add_parser("prox-on", help="re-enable the proximity sensor")

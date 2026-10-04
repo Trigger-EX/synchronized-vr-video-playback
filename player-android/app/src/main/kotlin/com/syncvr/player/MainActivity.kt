@@ -216,8 +216,20 @@ class MainActivity : Activity(), SurfaceHolder.Callback, PlayerHost {
             model = Build.MODEL ?: "",
             appVersion = BuildConfig.VERSION_NAME,
         )
+        // Optional `--es server host[:port]` launch extra (USB mode: 127.0.0.1 via adb reverse).
+        val server = intent?.getStringExtra("server")?.trim().orEmpty()
+        val config = if (server.isEmpty()) {
+            ConnectionConfig()
+        } else {
+            val port = server.substringAfterLast(':', "").toIntOrNull()
+            if (server.count { it == ':' } == 1 && port != null) {
+                ConnectionConfig(server = server.substringBeforeLast(':'), port = port)
+            } else {
+                ConnectionConfig(server = server)
+            }
+        }
         val conn = ServerConnection(
-            ConnectionConfig(),
+            config,
             hello,
             guard = MulticastLockGuard(this),
             log = { Log.i(TAG, it) },
