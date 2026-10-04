@@ -2,13 +2,18 @@
 
 import asyncio
 import base64
+import dataclasses
+import json
 import statistics
 import time
 
 import aiohttp
 import pytest
 
+from conftest import make_mp4
+from syncvr import controller as controller_mod
 from syncvr.app import ServerConfig, SyncServer
+from syncvr.controller import CommandError
 from syncvr.sim import SimHeadset
 
 
@@ -80,8 +85,8 @@ async def test_hello_reports_player_app(server, fleet):
     headsets = await fleet(1)
     dev = server.controller.devices[headsets[0].device_id]
     assert dev.player == "sim"
-    # A native-player hello, and an old Unity one that has no "player" field.
-    for hello, expected in (({"player": "native"}, "native"), ({}, "unity")):
+    # A native-player hello, and an old one that has no "player" field.
+    for hello, expected in (({"player": "native"}, "native"), ({}, "")):
         base = {"device_id": "x1", "model": "Oculus Go", "app_version": "1", "serial": "s"}
 
         class Conn:
@@ -399,3 +404,124 @@ async def test_stop_with_open_keepalive_http(content_dir, tmp_path):
     await reader.readuntil(b"\r\n\r\n")
     await asyncio.wait_for(srv.stop(), 5)
     writer.close()
+
+
+async def test_command_warns_when_no_headset_is_online(server, fleet):
+    # Known but offline headset: the command is accepted and the operator is told.
+    ghost = server.controller.headset_connected(
+        {"device_id": "ghost"}, type("C", (), {"remote_ip": "127.0.0.1", "http_port": 0, "send": lambda *a: None,
+                                              "close": lambda *a: None})())
+    server.controller.headset_disconnected(ghost, ghost.conn)
+    result = (await api(server, "play", video="trailer_flat.mp4"))["result"]
+    assert result["online"] == 0 and "online" in result["warning"]
+
+    headsets = await fleet(1)
+    result = (await api(server, "pause"))["result"]
+    assert result["online"] == 1 and "warning" not in result
+    result = (await api(server, "stop", targets=["ghost"]))["result"]
+    assert result["online"] == 0 and result["warning"]
+    # Only commands that drive playback warn.
+    assert "warning" not in (await api(server, "volume", targets=["ghost"], value=0.5))["result"]
+
+    with pytest.raises(CommandError):
+        server.controller.execute("play", {"targets": []})
+    with pytest.raises(CommandError):
+        server.controller.execute("play", {"targets": {"group": "nobody"}, "video": "trailer_flat.mp4"})
+    assert headsets
+
+
+def restart_config(content_dir, tmp_path):
+    return ServerConfig(content_dir=content_dir, data_dir=tmp_path / "data", host="127.0.0.1",
+                        http_port=0, tcp_port=0, discovery=False)
+
+
+async def test_download_resumes_after_server_restart(content_dir, tmp_path):
+    make_mp4(content_dir / "big.mp4", duration=60.0, mdat_bytes=4_000_000)
+    config = restart_config(content_dir, tmp_path)
+    srv = SyncServer(config)
+    await srv.start()
+    h = SimHeadset(1, "127.0.0.1", srv.tcp_port, download_dir=tmp_path / "hs", throttle_bps=1_000_000)
+    task = asyncio.create_task(h.run())
+    srv2 = None
+    try:
+        await wait_for(lambda: h.connected.is_set())
+        await api(srv, "sync_content", videos=["big.mp4"])
+        part = tmp_path / "hs" / "big.mp4.part"
+        await wait_for(lambda: part.exists() and part.stat().st_size > 100_000)
+        tcp_port = srv.tcp_port
+        # Ctrl+C mid-download must not hang on the in-flight transfer, and must keep the job.
+        await asyncio.wait_for(srv.stop(), 5)
+        saved = json.loads((tmp_path / "data" / "state.json").read_text())
+        assert saved["downloads"][h.device_id]["files"] == ["big.mp4"]
+
+        srv2 = SyncServer(dataclasses.replace(config, tcp_port=tcp_port))
+        await srv2.start()
+        await wait_for(lambda: (tmp_path / "hs" / "big.mp4").exists(), timeout=20)
+        assert (tmp_path / "hs" / "big.mp4").read_bytes() == (content_dir / "big.mp4").read_bytes()
+        assert len([m for m in h.messages if m["type"] == "sync_content"]) == 2
+        await wait_for(lambda: not srv2.controller.distributor.active and not srv2.controller.distributor.idle)
+    finally:
+        task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
+        if srv2 is not None:
+            await srv2.stop()
+
+
+async def test_idle_job_is_kept_until_headset_finishes(content_dir, tmp_path, monkeypatch):
+    # The headset is busy hashing (no `download` in its status) for longer than the idle grace.
+    monkeypatch.setattr(controller_mod, "DOWNLOAD_IDLE_GRACE_S", 0.5)
+    srv = SyncServer(restart_config(content_dir, tmp_path))
+    await srv.start()
+    await asyncio.get_running_loop().run_in_executor(None, srv.analyzer.wait, 20)
+    src = (content_dir / "trailer_flat.mp4").read_bytes()
+    (tmp_path / "hs").mkdir()
+    (tmp_path / "hs" / "trailer_flat.mp4").write_bytes(src[:-1] + b"X")  # same size, wrong content
+    h = SimHeadset(1, "127.0.0.1", srv.tcp_port, download_dir=tmp_path / "hs")
+    original = h._verify
+
+    async def slow_verify(path, expected):
+        await asyncio.sleep(2.0)
+        return await original(path, expected)
+
+    h._verify = slow_verify
+    task = asyncio.create_task(h.run())
+    try:
+        await wait_for(lambda: h.connected.is_set())
+        dist = srv.controller.distributor
+        await wait_for(lambda: srv.controller.devices[h.device_id].inventory)
+        srv.controller.devices[h.device_id].inventory = {}  # as if the file were not known to be there
+        await api(srv, "sync_content", videos=["trailer_flat.mp4"])
+        await wait_for(lambda: h.device_id in dist.idle, timeout=3)
+        assert h.device_id not in dist.active
+        assert h.device_id in srv.controller.dump()["downloads"]  # still survives a restart
+        await wait_for(lambda: (tmp_path / "hs" / "trailer_flat.mp4").exists()
+                       and (tmp_path / "hs" / "trailer_flat.mp4").read_bytes() == src, timeout=15)
+        await wait_for(lambda: not dist.idle and not dist.active)
+        assert srv.controller.dump()["downloads"] == {}
+    finally:
+        task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
+        await srv.stop()
+
+
+async def test_finish_from_an_older_job_is_ignored(content_dir, tmp_path):
+    srv = SyncServer(restart_config(content_dir, tmp_path))
+    await srv.start()
+    h = SimHeadset(1, "127.0.0.1", srv.tcp_port, download_dir=tmp_path / "hs", throttle_bps=50_000)
+    task = asyncio.create_task(h.run())
+    try:
+        await wait_for(lambda: h.connected.is_set())
+        dist = srv.controller.distributor
+        await api(srv, "sync_content", videos=["trailer_flat.mp4"])
+        await wait_for(lambda: h.device_id in dist.active)
+        job = dist.active[h.device_id]["id"]
+        dev = srv.controller.devices[h.device_id]
+        srv.controller.headset_message(dev, {"type": "downloads_finished", "ok": [], "failed": [], "job": "old"})
+        assert h.device_id in dist.active
+        # Old apps send no job id: accepted.
+        srv.controller.headset_message(dev, {"type": "downloads_finished", "ok": [], "failed": []})
+        assert h.device_id not in dist.active and job
+    finally:
+        task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
+        await srv.stop()

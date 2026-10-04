@@ -38,8 +38,8 @@ DEFAULT_SYNC_SETTINGS = {
     "pause_lead_ms": 300,
     # "rate": nudge playback speed to absorb small drift, hard-seek big drift.
     # "seek": only ever hard-seek (use if rate changes misbehave on a device).
-    # "external": hand the target time to the player's own clock sync (Unity
-    #             VideoTimeReference.ExternalTime); experimental.
+    # "external": hand the target time to the video player's own clock sync, if
+    #             it has one; experimental.
     "correction_mode": "rate",
     # Drift below this is ignored.
     "deadband_ms": 20,

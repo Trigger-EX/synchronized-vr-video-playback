@@ -74,6 +74,8 @@ function connect() {
       render();
     } else if (msg.type === "result" && !msg.ok) {
       toast(msg.error, true);
+    } else if (msg.type === "result" && msg.result && msg.result.warning) {
+      toast(msg.result.warning, true);
     }
   };
 }

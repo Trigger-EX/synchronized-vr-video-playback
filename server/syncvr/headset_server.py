@@ -129,7 +129,7 @@ class HeadsetServer:
     async def start(self) -> None:
         # Content downloads share the headset port: some networks only let this one through.
         if self.content_app is not None:
-            self._runner = web.AppRunner(self.content_app, access_log=None)
+            self._runner = web.AppRunner(self.content_app, access_log=None, shutdown_timeout=2.0)
             await self._runner.setup()
         loop = asyncio.get_running_loop()
         self.server = await loop.create_server(lambda: _Sniffer(self), self.host, self.port)

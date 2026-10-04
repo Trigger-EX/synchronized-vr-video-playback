@@ -2,6 +2,7 @@
 
 import asyncio
 import logging
+import signal
 from dataclasses import dataclass
 from pathlib import Path
 from typing import List, Optional
@@ -23,6 +24,8 @@ log = logging.getLogger(__name__)
 
 SAVE_INTERVAL_S = 2.0
 RESCAN_INTERVAL_S = 30.0
+# In-flight downloads get this long to finish when the server stops (aiohttp's default is 60 s).
+SHUTDOWN_TIMEOUT_S = 2.0
 
 
 @dataclass
@@ -88,7 +91,7 @@ class SyncServer:
         loop = asyncio.get_running_loop()
         self.analyzer.on_update = lambda: loop.call_soon_threadsafe(self.controller.changed)
         await self.headsets.start()
-        self._runner = web.AppRunner(self.web.app, access_log=None)
+        self._runner = web.AppRunner(self.web.app, access_log=None, shutdown_timeout=SHUTDOWN_TIMEOUT_S)
         await self._runner.setup()
         site = web.TCPSite(self._runner, self.config.host, self.config.http_port)
         await site.start()
@@ -111,16 +114,21 @@ class SyncServer:
         log.info("content folder: %s (%d videos)", self.library.root.resolve(), len(self.library.videos))
 
     async def stop(self) -> None:
-        for task in self._tasks:
-            task.cancel()
-        self.analyzer.on_update = None
-        if self.beacon:
-            await self.beacon.stop()
-        await self.headsets.stop()
-        if self._runner:
-            await self._runner.cleanup()
-        self.analyzer.close()
+        # Save first: closing the connections below must not be able to lose the pending
+        # downloads if this coroutine is cancelled or the process killed while it waits.
         self._save()
+        try:
+            for task in self._tasks:
+                task.cancel()
+            self.analyzer.on_update = None
+            if self.beacon:
+                await self.beacon.stop()
+            await self.headsets.stop()
+            if self._runner:
+                await self._runner.cleanup()
+            self.analyzer.close()
+        finally:
+            self._save()
 
     def _save(self) -> None:
         self.controller.dirty = False
@@ -147,7 +155,15 @@ class SyncServer:
 async def serve_forever(config: ServerConfig) -> None:
     server = SyncServer(config)
     await server.start()
+    stopping = asyncio.Event()
+    loop = asyncio.get_running_loop()
+    for sig in (signal.SIGINT, signal.SIGTERM):
+        try:
+            # A second Ctrl+C then does nothing instead of killing the process mid-save.
+            loop.add_signal_handler(sig, stopping.set)
+        except (NotImplementedError, RuntimeError, ValueError):  # Windows, or not the main thread
+            pass
     try:
-        await asyncio.Event().wait()
+        await stopping.wait()
     finally:
         await server.stop()

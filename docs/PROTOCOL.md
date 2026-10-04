@@ -35,11 +35,11 @@ object has a `type`. **All times are server-clock seconds** (the server's
 
 | type | fields | when |
 |---|---|---|
-| `hello` | `proto`, `device_id`, `serial`, `model`, `app_version`, `player` (`native` for the player in `player-android/`, or absent for the legacy Unity app) | first line on every connection |
+| `hello` | `proto`, `device_id`, `serial`, `model`, `app_version`, `player` (`native` for the player in `player-android/`, `sim` for the simulator; optional, older apps omit it) | first line on every connection |
 | `time_ping` | `id`, `t0` (headset clock) | ~10/s right after connecting, then every 2 s |
 | `inventory` | `files: [{name, size}]` | after connecting and whenever local files change |
 | `status` | see below | every second |
-| `downloads_finished` | `ok: [names]`, `failed: [names]`, `cancelled` | end of a `sync_content` job |
+| `downloads_finished` | `ok: [names]`, `failed: [names]`, `cancelled`, `job` (echoed from `sync_content`; absent from older apps) | end of a `sync_content` job |
 | `event` | `level` (`info`/`warn`/`error`), `message` | noteworthy things (shown in the dashboard log) |
 
 `status` fields: `state` (`idle`, `loading`, `ready`, `playing`, `syncing`, `paused`,
@@ -64,7 +64,7 @@ position error, + = ahead), `rate`, `mode`, `seek_time_ms`, `start_latency_ms`,
 | `recenter` | | current viewing direction becomes the front |
 | `message` | `text`, `seconds` | show text in the headset (`seconds: 0` clears it) |
 | `identify` | `name`, `seconds` | show the name in large text and beep |
-| `sync_content` | `files: [{name, size, url, sha256?}]`, `delete_others` | download missing/incomplete files one after another (HTTP Range resume); optionally delete other videos |
+| `sync_content` | `files: [{name, size, url, sha256?}]`, `delete_others`, `job` | download missing/incomplete files one after another (HTTP Range resume); optionally delete other videos |
 | `cancel_downloads` | | stop the current download job |
 | `delete_content` | `names` | delete videos (the loaded one is kept) |
 
@@ -73,8 +73,17 @@ position error, + = ahead), `rate`, `mode`, `seek_time_ms`, `start_latency_ms`,
 `sha256` as "no checksum, trust the size". When it is present, a headset verifies each file after downloading
 it (and may verify an already complete file before skipping it). On a mismatch it deletes the file, downloads
 it again from scratch once, and reports the name under `failed` in `downloads_finished` if the second copy
-is wrong too. The Unity app ignores the field; the native player verifies. The same hash is sent as the
+is wrong too. The native player verifies. The same hash is sent as the
 `X-Content-SHA256` header of `GET /content/<file>` when known.
+
+`job` is an opaque id the server picks for each `sync_content`. The headset echoes it in
+`downloads_finished`, and the server ignores a `downloads_finished` whose `job` is not the current one (a
+headset may still be finishing a job from before a server restart); a missing `job` is accepted. While a
+job runs, report progress in `status.download` every second, including while checking existing files
+(hashing). A job whose headset has reported no `download` for 20 s stops counting toward the concurrent
+download limit but is kept, and saved, until `downloads_finished` arrives, so a server restart never loses it.
+After a restart the server re-sends `sync_content` on reconnect; the headset must replace its running job
+with the new one and resume partial `.part` files.
 
 Projections: `360`, `180`, `flat`. Stereo: `mono`, `tb` (top/bottom), `sbs` (side-by-side).
 
@@ -149,7 +158,13 @@ SyncVR with plain HTTP calls. With `--password`, send HTTP basic auth (any user 
 | `GET /content/<file>` | the video file (supports Range); `X-Content-SHA256` header once the checksum is known |
 | `GET /ws` | WebSocket: pushes `{"type":"state","state":…}`; accepts command objects like `/api/command` |
 
-`targets`: `"all"` (default), `"online"`, a list of headset ids, or `{"group": "Room A"}`.
+`targets`: `"all"` (default), `"online"`, a list of headset ids, or `{"group": "Room A"}`. A target list that
+selects no headset is a 400 error.
+
+The result of a command holds `targets` (how many headsets it addressed) and `online` (how many of those are
+connected). For `load`, `play`, `pause`, `seek` and `stop`, when none is online the result also has a
+`warning` string; the command is still remembered and applied when the headsets connect. The dashboard
+shows the warning as a toast.
 
 Actions:
 

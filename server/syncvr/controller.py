@@ -11,6 +11,7 @@ should be at any moment.
 
 import logging
 import time
+import uuid
 from collections import Counter, OrderedDict, defaultdict, deque
 from dataclasses import dataclass, field
 from typing import Any, Callable, Dict, Iterable, List, Optional
@@ -21,7 +22,8 @@ from .protocol import DEFAULT_SYNC_SETTINGS, server_clock, validate_settings
 
 log = logging.getLogger(__name__)
 
-# How long a download job may look idle on the headset before its slot is freed.
+# How long a headset may go without reporting a download before its job stops counting
+# toward the concurrent-download limit (the job itself is kept until the headset says it is done).
 DOWNLOAD_IDLE_GRACE_S = 20.0
 
 
@@ -36,7 +38,7 @@ class Device:
     group: str = ""
     model: str = ""
     app_version: str = ""
-    player: str = ""  # which app the headset runs: "native", "unity", ... ("" = unknown)
+    player: str = ""  # which app the headset runs: "native", "sim", ... ("" = unknown)
     serial: str = ""
     ip: str = ""
     volume: float = 1.0
@@ -99,9 +101,14 @@ class Distributor:
         self.max_concurrent = max_concurrent
         self.queue: "OrderedDict[str, dict]" = OrderedDict()
         self.active: Dict[str, dict] = {}
+        # Jobs whose headset stopped reporting progress: they no longer hold a download slot,
+        # but are kept (and persisted) until the headset reports the end of the job. A headset
+        # may be hashing existing files, or still be busy with a job from before a server restart.
+        self.idle: Dict[str, dict] = {}
 
     def request(self, device_id: str, names: List[str], delete_others: bool) -> None:
         self.queue[device_id] = {"files": list(names), "delete_others": delete_others}
+        self.idle.pop(device_id, None)
         self.controller.dirty = True
         self.pump()
 
@@ -122,13 +129,15 @@ class Distributor:
             extras = job["delete_others"] and any(n not in wanted for n in dev.inventory)
             if not missing and not extras:
                 continue
-            job["started"] = time.monotonic()
+            job["id"] = uuid.uuid4().hex[:8]
+            job["started"] = job["last_progress"] = time.monotonic()
             job["bytes"] = sum(v.size for v in missing)
             self.active[device_id] = job
             self.controller.send(dev, {
                 "type": "sync_content",
                 "files": [self._file_entry(dev, v) for v in videos],
                 "delete_others": job["delete_others"],
+                "job": job["id"],
             })
             self.controller.log_event("info", f"sending {len(missing)} file(s) to {dev.label}", dev)
         self.controller.changed()
@@ -142,7 +151,12 @@ class Distributor:
 
     def finished(self, device_id: str, msg: dict) -> None:
         self.controller.dirty = True
-        if self.active.pop(device_id, None) is not None:
+        current = self.active.get(device_id) or self.idle.get(device_id)
+        if current is not None and msg.get("job") not in (None, current["id"]):
+            return  # the end of an earlier job (e.g. one started before a server restart)
+        self.idle.pop(device_id, None)
+        self.active.pop(device_id, None)
+        if current is not None:
             dev = self.controller.devices.get(device_id)
             failed = msg.get("failed") or []
             if failed:
@@ -153,12 +167,20 @@ class Distributor:
 
     def check_idle(self, device_id: str, status: dict) -> None:
         job = self.active.get(device_id)
-        if job and not status.get("download") and time.monotonic() - job["started"] > DOWNLOAD_IDLE_GRACE_S:
-            self.finished(device_id, {})
+        if not job:
+            return
+        now = time.monotonic()
+        if status.get("download"):
+            job["last_progress"] = now
+        elif now - job["last_progress"] > DOWNLOAD_IDLE_GRACE_S:
+            # Free the slot but keep the job: only the headset can say it is finished.
+            del self.active[device_id]
+            self.idle[device_id] = job
+            self.pump()
 
     def disconnected(self, device_id: str) -> None:
         self.controller.dirty = True
-        job = self.active.pop(device_id, None)
+        job = self.active.pop(device_id, None) or self.idle.pop(device_id, None)
         if job is not None:
             # Retry first when the headset comes back.
             self.queue[device_id] = job
@@ -169,7 +191,7 @@ class Distributor:
         self.controller.dirty = True
         for device_id in device_ids:
             self.queue.pop(device_id, None)
-            if self.active.pop(device_id, None) is not None:
+            if (self.active.pop(device_id, None) or self.idle.pop(device_id, None)) is not None:
                 dev = self.controller.devices.get(device_id)
                 if dev and dev.online:
                     self.controller.send(dev, {"type": "cancel_downloads"})
@@ -178,6 +200,8 @@ class Distributor:
     def pending_json(self) -> dict:
         """Jobs to resume after a server restart (active ones first), without progress."""
         jobs = dict(self.active)
+        for device_id, job in self.idle.items():
+            jobs.setdefault(device_id, job)
         for device_id, job in self.queue.items():
             jobs.setdefault(device_id, job)
         return {i: {"files": job["files"], "delete_others": job["delete_others"]} for i, job in jobs.items()}
@@ -187,6 +211,7 @@ class Distributor:
             "max_concurrent": self.max_concurrent,
             "queued": list(self.queue),
             "active": list(self.active),
+            "idle": list(self.idle),
         }
 
 
@@ -277,8 +302,8 @@ class Controller:
         dev.ip = conn.remote_ip
         dev.model = str(hello.get("model", dev.model))
         dev.app_version = str(hello.get("app_version", ""))
-        # The Unity app predates this field and never sends it.
-        dev.player = str(hello.get("player") or "unity")
+        # Older apps do not send this field.
+        dev.player = str(hello.get("player") or "")
         dev.serial = str(hello.get("serial", dev.serial))
         dev.connected_at = dev.last_seen = time.time()
         dev.status = {}
@@ -353,9 +378,15 @@ class Controller:
         if handler is None:
             raise CommandError(f"unknown action: {action}")
         targets = self.resolve_targets(params.get("targets"))
+        if not targets:
+            raise CommandError("no headsets match the selected targets")
+        online = sum(1 for d in targets if d.online)
         result = handler(targets, params) or {}
         self.changed()
         result.setdefault("targets", len(targets))
+        result["online"] = online
+        if not online and action in ("load", "play", "pause", "seek", "stop"):
+            result["warning"] = "No targeted headset is online; it will get this when it connects."
         return result
 
     def _video(self, name) -> Video:

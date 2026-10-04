@@ -182,8 +182,10 @@ class LocalClock:
 class SimHeadset:
     def __init__(self, index: int, server: Optional[str], port: int = DEFAULT_TCP_PORT,
                  download_dir: Optional[Path] = None, seed: Optional[int] = None,
-                 discovery_port: int = DEFAULT_DISCOVERY_PORT, realistic: bool = True):
+                 discovery_port: int = DEFAULT_DISCOVERY_PORT, realistic: bool = True,
+                 throttle_bps: Optional[float] = None):
         self.index = index
+        self.throttle_bps = throttle_bps  # cap on download speed, bytes/s (None = unlimited)
         self.server = server
         self.port = port
         self.discovery_port = discovery_port
@@ -209,6 +211,7 @@ class SimHeadset:
         self.connected = asyncio.Event()
         self.download: Optional[dict] = None
         self.download_task: Optional[asyncio.Task] = None
+        self.job = None  # id of the current sync_content job, echoed in downloads_finished
         self._ping_id = 0
         self._pending_events = []
         self.messages = []  # everything received, for tests
@@ -371,6 +374,7 @@ class SimHeadset:
         elif kind == "sync_content":
             if self.download_task and not self.download_task.done():
                 self.download_task.cancel()
+            self.job = msg.get("job")
             self.download_task = asyncio.create_task(self._sync_content(msg))
         elif kind == "cancel_downloads":
             if self.download_task:
@@ -385,6 +389,7 @@ class SimHeadset:
         import aiohttp  # only needed when content is actually pushed
 
         ok, failed = [], []
+        job = msg.get("job")
         wanted = {f["name"] for f in msg.get("files", [])}
         try:
             if msg.get("delete_others"):
@@ -415,9 +420,13 @@ class SimHeadset:
                         log.warning("%s: download of %s failed: %s", self.device_id, name, exc)
                         failed.append(name)
         finally:
-            self.download = None
+            if asyncio.current_task() is self.download_task:  # not a superseded job
+                self.download = None
             self.send({"type": "inventory", "files": self.inventory()})
-        self.send({"type": "downloads_finished", "ok": ok, "failed": failed})
+        done = {"type": "downloads_finished", "ok": ok, "failed": failed}
+        if job is not None:
+            done["job"] = job
+        self.send(done)
 
     async def _verify(self, path: Path, expected: str) -> bool:
         """Check a finished file against the server's SHA-256; a bad file is deleted."""
@@ -435,17 +444,20 @@ class SimHeadset:
             part.unlink()
             have = 0
         headers = {"Range": f"bytes={have}-"} if have else {}
-        self.download = {"name": dest.name, "received": have, "total": size}
+        progress = self.download = {"name": dest.name, "received": have, "total": size}
         async with session.get(url, headers=headers, timeout=aiohttp_timeout()) as resp:
             if resp.status == 200:
                 have = 0
             elif resp.status != 206:
                 raise ValueError(f"HTTP {resp.status}")
             with open(part, "ab" if have else "wb") as out:
-                async for chunk in resp.content.iter_chunked(256 * 1024):
+                async for chunk in resp.content.iter_chunked(64 * 1024 if self.throttle_bps else 256 * 1024):
                     out.write(chunk)
+                    out.flush()
                     have += len(chunk)
-                    self.download["received"] = have
+                    progress["received"] = have
+                    if self.throttle_bps:
+                        await asyncio.sleep(len(chunk) / self.throttle_bps)
         if have != size:
             raise ValueError(f"size mismatch: got {have}, expected {size}")
         os.replace(part, dest)
