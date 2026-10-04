@@ -247,7 +247,7 @@ def _offer_install(message: str, tk_ok: bool) -> bool:
     try:
         import importlib
         importlib.invalidate_caches()
-        import aiohttp  # noqa: F401
+        __import__("aiohttp")  # availability probe
         return True
     except ImportError:
         return False
@@ -331,7 +331,7 @@ def main(args) -> int:
     """Entry point for ``python -m syncvr gui``."""
     tk_ok = tk_available() if not args.console else False
     try:
-        import aiohttp  # noqa: F401
+        __import__("aiohttp")  # availability probe
     except ImportError:
         if not _offer_install("SyncVR needs the 'aiohttp' package, which is not installed.", tk_ok):
             return 1
