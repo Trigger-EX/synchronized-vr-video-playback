@@ -25,3 +25,18 @@ Thread safety (bridge-only access); in-place card updates (no rebuild); don't cl
 
 ## Cannot verify here
 Seeing the GUI, Mint desktop launch, SmartScreen/Gatekeeper, HiDPI, real headsets, Windows/macOS builds (CI only).
+
+---
+
+# Plan: default view type per video (no auto-cycling)
+
+Server already has `guess_format()`, editable `projection`/`stereo`, persistence. Player ignores `cmd.projection/stereo` and cycles 4 modes every 15 s.
+
+1. **Detection** (`server/syncvr/library.py`, `tests/test_library.py`): `guess_format` returns only matched fields; add `guess_from_resolution(w,h)` (2:1 -> 360 mono, 1:1 -> 360 tb, 4:1 -> 360 sbs, 1.6-1.9 -> flat mono, ~3.55 -> flat sbs, else 360 mono). Precedence: operator value > filename > resolution > default. Add non-editable `format_source` to `Video`/`to_json`. `update_meta` merges only changed keys; value `"auto"` for projection/stereo removes the stored key and re-detects.
+2. **Live view change** (`controller.py`, `protocol.py`, `docs/PROTOCOL.md`, `tests/test_controller_state.py`): `update_video` changing projection/stereo/rotation updates `desired` and sends `{"type":"view","video","projection","stereo","rotation"}` to devices playing that video.
+3. **GUI** (`gui/library.py`, `gui/playback.py` + tests): "Auto (detected: X)" choice and `format_source` tooltip; a "View" combo in the playback panel that sends `bridge.update_video`.
+4. **Core Kotlin**: `ViewSpec(layer, stereo, half)` + `from(projection, stereo)`; parse `view` into `PlayerHost.onViewCommand`; tests.
+5. **Native/app**: `nativeSetMode(handle, mode, stereo, half)`; SBS and 180 support in layers; `MainActivity` drops `modeTick` unless `--ez cycle_modes true`; apply view from commands. Unverified without hardware.
+6. **Docs**: HEADSET_SETUP / EXECUTION_PLAN: cycle is a debug option.
+
+Risks: 2:1 can be 360 mono or 180 SBS (filename token decides); native changes unverified on hardware; stored metadata for old videos counts as "operator".
