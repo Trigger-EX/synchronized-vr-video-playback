@@ -219,17 +219,56 @@ function renderGrid() {
   $("#grid-empty").hidden = state.devices.length > 0;
 }
 
+const LEVEL_LABEL = { error: ["error", "errors"], warn: ["warning", "warnings"], info: ["note", "notes"] };
+
+function probeSummary(v) {
+  const p = v.probe;
+  if (!p || !p.video) return v.width ? `${v.width}×${v.height}` : "";
+  const x = p.video, bits = [];
+  bits.push(`${x.width}×${x.height}`);
+  bits.push([x.codec, x.profile, x.level_text ? "L" + x.level_text : ""].filter(Boolean).join(" "));
+  if (x.fps) bits.push(`${+x.fps.toFixed(2)} fps`);
+  if (p.bit_rate) bits.push(`${(p.bit_rate / 1e6).toFixed(1)} Mb/s`);
+  if (p.keyframes && !p.keyframes.lower_bound) bits.push(`GOP ${+p.keyframes.max.toFixed(1)} s`);
+  return bits.join(" · ");
+}
+
+// One chip per file (worst severity) that expands to the individual messages.
+function checksCell(v) {
+  if (!v.analysis) return "";
+  const issues = v.issues || [];
+  let chip;
+  if (v.analysis === "pending") {
+    chip = `<span class="chip">checking…</span>`;
+  } else if (!issues.length) {
+    chip = `<span class="chip lvl-ok">OK</span>`;
+  } else {
+    const worst = ["error", "warn", "info"].find((l) => issues.some((i) => i.level === l));
+    const n = issues.filter((i) => i.level === worst).length;
+    chip = `<span class="chip lvl-${worst}">${n} ${LEVEL_LABEL[worst][n === 1 ? 0 : 1]}</span>`;
+  }
+  const tip = issues.map((i) => `${i.level}: ${i.message}`).join("\n");
+  const list = issues.length
+    ? issues.map((i) => `<li class="lvl-${i.level}">${esc(i.message)}</li>`).join("")
+    : v.analysis === "pending" ? `<li class="muted">Analysing…</li>` : `<li class="muted">No problems found.</li>`;
+  const sha = v.sha256 ? `<li class="muted" title="${v.sha256}">SHA-256 ${v.sha256.slice(0, 16)}…</li>` : "";
+  return `<details><summary title="${esc(tip)}">${chip}</summary><ul class="issues">${list}${sha}</ul></details>`;
+}
+
 function renderLibrary() {
   const key = JSON.stringify(state.library) + JSON.stringify(state.devices.map((d) => d.inventory));
   if (key === lastLibraryKey || document.activeElement?.closest("#library-body")) return;
   lastLibraryKey = key;
   const total = state.devices.length;
   const opt = (values, cur) => values.map(([v, label]) => `<option value="${v}"${v === cur ? " selected" : ""}>${label}</option>`).join("");
+  const opened = new Set([...document.querySelectorAll("#library-body details[open]")].map((e) => e.closest("tr").dataset.name));
   $("#library-body").innerHTML = state.library.map((v) => {
     const have = state.devices.filter((d) => d.inventory[v.name] === v.size).length;
+    const summary = probeSummary(v);
     return `<tr data-name="${esc(v.name)}">
       <td><input class="title" data-field="title" value="${esc(v.title)}"></td>
-      <td class="file" title="${esc(v.name)}">${esc(v.name)}${v.width ? `<br><span class="muted">${v.width}×${v.height}</span>` : ""}</td>
+      <td class="file" title="${esc(v.name)}">${esc(v.name)}${summary ? `<br><span class="muted">${esc(summary)}</span>` : ""}</td>
+      <td class="checks">${checksCell(v).replace("<details>", opened.has(v.name) ? "<details open>" : "<details>")}</td>
       <td>${fmtTime(v.duration)}</td>
       <td>${fmtBytes(v.size)}</td>
       <td><select data-field="projection">${opt([["360", "360°"], ["180", "180°"], ["flat", "Flat screen"]], v.projection)}</select></td>

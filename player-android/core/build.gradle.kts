@@ -1,4 +1,5 @@
-// Plain Kotlin: sync engine, protocol and networking. Testable on any JVM.
+import org.jetbrains.kotlin.gradle.dsl.JvmTarget
+
 plugins {
     id("org.jetbrains.kotlin.jvm")
 }
@@ -9,9 +10,7 @@ java {
 }
 
 kotlin {
-    compilerOptions {
-        jvmTarget.set(org.jetbrains.kotlin.gradle.dsl.JvmTarget.JVM_17)
-    }
+    compilerOptions { jvmTarget.set(JvmTarget.JVM_17) }
 }
 
 dependencies {

@@ -6,6 +6,7 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Dict, List, Optional
 
+from .analysis import ContentAnalyzer
 from .mp4 import read_mp4_info
 from .protocol import PROJECTIONS, STEREO_MODES, is_safe_filename
 
@@ -61,8 +62,10 @@ def guess_format(filename: str) -> Dict[str, str]:
 
 
 class Library:
-    def __init__(self, root: Path, metadata: Optional[Dict[str, dict]] = None):
+    def __init__(self, root: Path, metadata: Optional[Dict[str, dict]] = None,
+                 analyzer: Optional[ContentAnalyzer] = None):
         self.root = Path(root)
+        self.analyzer = analyzer
         self.root.mkdir(parents=True, exist_ok=True)
         self.metadata: Dict[str, dict] = metadata if metadata is not None else {}
         self.videos: Dict[str, Video] = {}
@@ -98,7 +101,18 @@ class Library:
             found[n] is not self.videos.get(n) for n in found
         )
         self.videos = found
+        if self.analyzer:
+            self.analyzer.prune(found)
+            for v in found.values():
+                self.analyzer.request(v.name, self.root / v.name, v.size, v.mtime)
         return changed
+
+    def sha256_of(self, name: str) -> Optional[str]:
+        """SHA-256 of a library file, or None while it has not been computed yet."""
+        v = self.videos.get(name)
+        if v is None or self.analyzer is None:
+            return None
+        return self.analyzer.sha256_of(v.name, v.size, v.mtime)
 
     def get(self, name: str) -> Optional[Video]:
         return self.videos.get(name)
@@ -135,5 +149,11 @@ class Library:
         for v in self.videos.values():
             d = asdict(v)
             d.pop("mtime")
+            if self.analyzer:
+                a = self.analyzer
+                d["probe"] = a.probe_of(v.name, v.size, v.mtime)
+                d["issues"] = a.issues_of(v.name, v.size, v.mtime)
+                d["analysis"] = a.analysis_state(v.name, v.size, v.mtime)
+                d["sha256"] = a.sha256_of(v.name, v.size, v.mtime)
             out.append(d)
         return out

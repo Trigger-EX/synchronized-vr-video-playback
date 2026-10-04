@@ -22,6 +22,7 @@ from pathlib import Path
 from typing import Optional
 
 from . import __version__
+from .analysis import sha256_file
 from .protocol import (DEFAULT_DISCOVERY_PORT, DEFAULT_TCP_PORT, PROTOCOL_VERSION, SERVICE_NAME, decode,
                        encode, is_safe_filename)
 from .sync_engine import ClockSync, SyncEngine
@@ -397,11 +398,18 @@ class SimHeadset:
                         failed.append(name)
                         continue
                     dest = self.download_dir / name
+                    expected = f.get("sha256")
                     if dest.exists() and dest.stat().st_size == size:
-                        ok.append(name)
-                        continue
+                        if not expected or await self._verify(dest, expected):
+                            ok.append(name)
+                            continue
                     try:
                         await self._download(session, f["url"], dest, size)
+                        if expected and not await self._verify(dest, expected):
+                            # Corrupt download: throw it away and fetch once more.
+                            await self._download(session, f["url"], dest, size)
+                            if not await self._verify(dest, expected):
+                                raise ValueError("checksum mismatch")
                         ok.append(name)
                     except (aiohttp.ClientError, OSError, ValueError, asyncio.TimeoutError) as exc:
                         log.warning("%s: download of %s failed: %s", self.device_id, name, exc)
@@ -410,6 +418,15 @@ class SimHeadset:
             self.download = None
             self.send({"type": "inventory", "files": self.inventory()})
         self.send({"type": "downloads_finished", "ok": ok, "failed": failed})
+
+    async def _verify(self, path: Path, expected: str) -> bool:
+        """Check a finished file against the server's SHA-256; a bad file is deleted."""
+        digest = await asyncio.get_running_loop().run_in_executor(None, sha256_file, path)
+        if digest == expected.lower():
+            return True
+        log.warning("%s: checksum mismatch on %s, discarding", self.device_id, path.name)
+        path.unlink(missing_ok=True)
+        return False
 
     async def _download(self, session, url: str, dest: Path, size: int) -> None:
         part = dest.with_name(dest.name + ".part")

@@ -124,11 +124,18 @@ class Distributor:
             self.active[device_id] = job
             self.controller.send(dev, {
                 "type": "sync_content",
-                "files": [{"name": v.name, "size": v.size, "url": dev.conn.content_url(v.name)} for v in videos],
+                "files": [self._file_entry(dev, v) for v in videos],
                 "delete_others": job["delete_others"],
             })
             self.controller.log_event("info", f"sending {len(missing)} file(s) to {dev.label}", dev)
         self.controller.changed()
+
+    def _file_entry(self, dev: "Device", video: Video) -> dict:
+        entry = {"name": video.name, "size": video.size, "url": dev.conn.content_url(video.name)}
+        sha256 = self.controller.library.sha256_of(video.name)
+        if sha256:  # omitted until the background checksum has finished
+            entry["sha256"] = sha256
+        return entry
 
     def finished(self, device_id: str, msg: dict) -> None:
         if self.active.pop(device_id, None) is not None:

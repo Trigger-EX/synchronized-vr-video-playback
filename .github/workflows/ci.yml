@@ -15,6 +15,7 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
+      - run: sudo apt-get update && sudo apt-get install -y ffmpeg
       - run: pip install -e ".[test]" pyflakes
       - run: python -m pyflakes syncvr tests
       - run: python -m pytest -q
@@ -37,6 +38,11 @@ jobs:
     defaults:
       run:
         working-directory: player-android
+    env:
+      SYNCVR_KEYSTORE_BASE64: ${{ secrets.SYNCVR_KEYSTORE_BASE64 }}
+      SYNCVR_KEYSTORE_PASSWORD: ${{ secrets.SYNCVR_KEYSTORE_PASSWORD }}
+      SYNCVR_KEY_ALIAS: ${{ secrets.SYNCVR_KEY_ALIAS }}
+      SYNCVR_KEY_PASSWORD: ${{ secrets.SYNCVR_KEY_PASSWORD }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-java@v4
@@ -44,36 +50,32 @@ jobs:
           distribution: temurin
           java-version: "17"
       - uses: gradle/actions/setup-gradle@v4
-      - name: Core unit tests
-        run: ./gradlew --no-daemon :core:test
+      - run: ./gradlew --no-daemon :core:test
       - name: Check signing secrets
-        env:
-          SYNCVR_KEYSTORE_BASE64: ${{ secrets.SYNCVR_KEYSTORE_BASE64 }}
-          SYNCVR_KEYSTORE_PASSWORD: ${{ secrets.SYNCVR_KEYSTORE_PASSWORD }}
-          SYNCVR_KEY_ALIAS: ${{ secrets.SYNCVR_KEY_ALIAS }}
-          SYNCVR_KEY_PASSWORD: ${{ secrets.SYNCVR_KEY_PASSWORD }}
         run: |
           missing=""
           for name in SYNCVR_KEYSTORE_BASE64 SYNCVR_KEYSTORE_PASSWORD SYNCVR_KEY_ALIAS SYNCVR_KEY_PASSWORD; do
-            if [ -z "${!name}" ]; then missing="$missing $name"; fi
+            [ -n "${!name}" ] || missing="$missing $name"
           done
           if [ -n "$missing" ]; then
-            echo "::error::Missing GitHub Actions secrets:$missing. Add them under Settings > Secrets and variables > Actions; the APK cannot be signed without them."
+            echo "::error title=Missing signing secrets::Add these repository secrets under Settings > Secrets and variables > Actions:$missing"
             exit 1
           fi
-          echo "$SYNCVR_KEYSTORE_BASE64" | base64 -d > "$RUNNER_TEMP/syncvr.jks"
+      - name: Fetch VrApi SDK
+        run: ./tools/fetch-vrapi.sh
       - name: Build signed APK
-        env:
-          SYNCVR_KEYSTORE_FILE: ${{ runner.temp }}/syncvr.jks
-          SYNCVR_KEYSTORE_PASSWORD: ${{ secrets.SYNCVR_KEYSTORE_PASSWORD }}
-          SYNCVR_KEY_ALIAS: ${{ secrets.SYNCVR_KEY_ALIAS }}
-          SYNCVR_KEY_PASSWORD: ${{ secrets.SYNCVR_KEY_PASSWORD }}
         run: |
+          export SYNCVR_KEYSTORE_FILE="$RUNNER_TEMP/syncvr.jks"
+          printf '%s' "$SYNCVR_KEYSTORE_BASE64" | base64 -d > "$SYNCVR_KEYSTORE_FILE"
           ./gradlew --no-daemon :app:assembleRelease
           cp app/build/outputs/apk/release/app-release.apk SyncVRPlayer.apk
-          "$(ls -d "$ANDROID_HOME"/build-tools/* | sort -V | tail -1)/apksigner" verify --print-certs SyncVRPlayer.apk
+          rm -f "$SYNCVR_KEYSTORE_FILE"
+      - name: Verify APK signature
+        run: |
+          apksigner="$ANDROID_HOME/build-tools/$(ls "$ANDROID_HOME/build-tools" | sort -V | tail -1)/apksigner"
+          "$apksigner" verify --print-certs SyncVRPlayer.apk
       - uses: actions/upload-artifact@v4
         with:
-          name: SyncVRPlayer
+          name: SyncVRPlayer-apk
           path: player-android/SyncVRPlayer.apk
           if-no-files-found: error

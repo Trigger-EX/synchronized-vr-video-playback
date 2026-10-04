@@ -63,9 +63,17 @@ position error, + = ahead), `rate`, `mode`, `seek_time_ms`, `start_latency_ms`,
 | `recenter` | | current viewing direction becomes the front |
 | `message` | `text`, `seconds` | show text in the headset (`seconds: 0` clears it) |
 | `identify` | `name`, `seconds` | show the name in large text and beep |
-| `sync_content` | `files: [{name, size, url}]`, `delete_others` | download missing/incomplete files one after another (HTTP Range resume); optionally delete other videos |
+| `sync_content` | `files: [{name, size, url, sha256?}]`, `delete_others` | download missing/incomplete files one after another (HTTP Range resume); optionally delete other videos |
 | `cancel_downloads` | | stop the current download job |
 | `delete_content` | `names` | delete videos (the loaded one is kept) |
+
+`sha256` is the lowercase hex SHA-256 of the file. The server computes it once per file in the background
+(cached by size and modification time), so the field is omitted while it is not ready yet; treat a missing
+`sha256` as "no checksum, trust the size". When it is present, a headset verifies each file after downloading
+it (and may verify an already complete file before skipping it). On a mismatch it deletes the file, downloads
+it again from scratch once, and reports the name under `failed` in `downloads_finished` if the second copy
+is wrong too. The Unity app ignores the field; the native player verifies. The same hash is sent as the
+`X-Content-SHA256` header of `GET /content/<file>` when known.
 
 Projections: `360`, `180`, `flat`. Stereo: `mono`, `tb` (top/bottom), `sbs` (side-by-side).
 
@@ -130,14 +138,14 @@ SyncVR with plain HTTP calls. With `--password`, send HTTP basic auth (any user 
 
 | Method & path | Body / result |
 |---|---|
-| `GET /api/state` | full snapshot: server, settings, devices, library, downloads, events |
+| `GET /api/state` | full snapshot: server, settings, devices, library, downloads, events. Each `library` entry also has `sha256` (null until computed), `probe` (ffprobe summary), `issues` (`[{level: error|warn|info, code, message}]`: the checks against the Go's limits) and `analysis` (`pending`, `done` or `unavailable` when ffprobe is not installed) |
 | `POST /api/command` | `{"action": …, "targets": …, …}` → `{"ok": true, "result": …}` or 400 `{"error": …}` |
 | `GET/POST /api/settings` | read / change sync settings (partial updates; `max_downloads` too) |
 | `POST /api/library/rescan` | re-read the content folder (also happens every 30 s) |
 | `POST /api/library/<file>` | `{"title", "projection", "stereo", "rotation", "loop"}` (any subset) |
 | `POST /api/devices/<id>` | `{"name", "group"}` |
 | `DELETE /api/devices/<id>` | forget an offline headset |
-| `GET /content/<file>` | the video file (supports Range) |
+| `GET /content/<file>` | the video file (supports Range); `X-Content-SHA256` header once the checksum is known |
 | `GET /ws` | WebSocket: pushes `{"type":"state","state":…}`; accepts command objects like `/api/command` |
 
 `targets`: `"all"` (default), `"online"`, a list of headset ids, or `{"group": "Room A"}`.

@@ -3,4 +3,5 @@ build/
 local.properties
 *.jks
 *.keystore
-.cxx/
+.kotlin/
+third_party/

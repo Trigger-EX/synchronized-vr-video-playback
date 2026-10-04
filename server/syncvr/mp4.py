@@ -76,6 +76,37 @@ def _parse_trak(f: BinaryIO, start: int, end: int) -> Tuple[Optional[bytes], Opt
     return handler, dims
 
 
+def moov_before_mdat(f: BinaryIO) -> Optional[bool]:
+    """Walk the top-level atoms of an open MP4/MOV file. True if ``moov`` comes before
+    ``mdat`` (playback can start while the file is still downloading), False if the media
+    data comes first, None if neither is found (not an MP4, or damaged). Only atom headers
+    are read, and the walk stops at the first ``moov`` or ``mdat``."""
+    pos = 0
+    while True:
+        f.seek(pos)
+        header = f.read(8)
+        if len(header) < 8:
+            return None
+        size, kind = struct.unpack(">I4s", header)
+        if kind == b"moov":
+            return True
+        if kind == b"mdat":
+            return False
+        if size == 1:
+            ext = f.read(8)
+            if len(ext) < 8:
+                return None
+            size = struct.unpack(">Q", ext)[0]
+        if size < 8:  # size 0 means "to the end of the file", anything else is corrupt
+            return None
+        pos += size
+
+
+def has_moov_at_front(path) -> Optional[bool]:
+    with open(path, "rb") as f:
+        return moov_before_mdat(f)
+
+
 def read_mp4_info(path) -> Mp4Info:
     info = Mp4Info()
     with open(path, "rb") as f:
