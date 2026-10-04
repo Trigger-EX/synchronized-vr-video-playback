@@ -90,21 +90,31 @@ the same serial `adb devices` shows, so it's easy to match a physical headset to
 
 `python3 -m syncvr adb kiosk on` disables the Oculus home (`com.oculus.vrshell`) and makes the
 player the home app, so the headset boots into it and the Oculus button returns to it. It
-needs an APK that declares the HOME intent filter (current builds do).
+needs a current APK: the HOME role lives in a disabled `.HomeAlias` that `kiosk on` enables
+through the app's `KioskReceiver` (protected by `android.permission.DUMP`, which only adb shell holds).
 
 ```bash
-python3 -m syncvr adb kiosk on           # disable vrshell, set the player as home
-python3 -m syncvr adb kiosk on --root    # the adb root recipe; needs USB, not Wi-Fi ADB
-python3 -m syncvr adb kiosk off          # re-enable vrshell and restore its home activity
+python3 -m syncvr adb kiosk on             # disable vrshell, enable the alias, set the player as home
+python3 -m syncvr adb kiosk on --root      # the adb root recipe; needs USB, not Wi-Fi ADB
+python3 -m syncvr adb kiosk off            # re-enable vrshell, clear the player's home choice, restore vrshell home
+python3 -m syncvr adb kiosk restore        # off, plus pm unhide
+python3 -m syncvr adb kiosk restore --root # also runs pm enable as root; USB only
 ```
 
-* **Recovery.** If a headset is stuck in the player, run `kiosk off` over ADB. Set up Wi-Fi on the
-  headset *before* `kiosk on`, since the Oculus UI is how you do that. Use USB for `--root`
-  (`adb root` restarts adbd, which drops Wi-Fi ADB).
+* **Verification.** `on` and `off` check the result and exit non-zero on failure. `off` and
+  `restore` fail if `pm list packages -d` still lists `com.oculus.vrshell` (after retrying
+  `pm enable --user 0`), and if the HOME activity (`cmd package resolve-activity`) is not
+  vrshell's. `on` fails if HOME does not resolve to the player (for example `ResolverActivity`).
+  The error says the next command to run; usually `kiosk restore --root` over USB.
+* **Recovery.** If a headset is stuck in the player, run `kiosk off`, and `kiosk restore` if that
+  fails. Set up Wi-Fi on the headset *before* `kiosk on`, since the Oculus UI is how you do that.
+  Use USB for `--root` (`adb root` restarts adbd, which drops Wi-Fi ADB).
+* **"Always" choice.** If you picked SyncVR with "Always" in the home chooser, that entry points
+  at the player; `off`/`restore` clear it (without `pm clear`, so `config.json` survives).
 * **Server address.** Kiosk headsets rely on `config.json` or UDP discovery for the server, not
   `--usb` (the `adb reverse` is lost on reboot).
-* **Unverified.** vrshell's HOME activity name on stock firmware is looked up by `kiosk off`
-  (`cmd package resolve-activity`); not yet tried on hardware.
+* **Unverified.** vrshell's home is assumed to be `com.oculus.vrshell/.MainActivity`, and that
+  the shell is granted `DUMP` on the Go; neither is confirmed on hardware after this change.
 
 ## Checkpoint 1 (hardware check)
 

@@ -200,34 +200,84 @@ def run(args) -> int:
             return f"Wi-Fi ADB on {addr}:5555" if addr else "Wi-Fi ADB enabled (no wlan0 address found)"
         return for_each(serials, wifi)
     if cmd == "kiosk":
-        home = f"{adb.package}/.MainActivity"
+        alias = f"{adb.package}/.HomeAlias"
+        vrshell_home = f"{VRSHELL}/.MainActivity"
+        resolve_home = ("cmd package resolve-activity --brief -a android.intent.action.MAIN "
+                        "-c android.intent.category.HOME")
 
         def set_home(s, activity):
             return adb.shell(s, f"cmd package set-home-activity {activity}", check=False)
 
-        def kiosk(s):
-            if args.state == "on":
-                if args.root:
-                    adb.run(s, "root")
-                    adb.run(s, "wait-for-device")
-                    outs = [adb.shell(s, f"pm disable {VRSHELL}", check=False), set_home(s, home)]
-                    adb.run(s, "unroot")
-                    adb.run(s, "wait-for-device")
-                    outs.append(set_home(s, home))
-                else:
-                    outs = [adb.shell(s, f"pm disable-user --user 0 {VRSHELL}", check=False), set_home(s, home)]
-            else:
-                outs = [adb.shell(s, f"pm enable {VRSHELL}", check=False)]
-                resolved = adb.shell(
-                    s, f"cmd package resolve-activity --brief -a android.intent.action.MAIN "
-                       f"-c android.intent.category.HOME {VRSHELL}", check=False)
-                outs.append(resolved)
-                if "/" not in (resolved.splitlines() or [""])[-1] or "Exception" in resolved or "Error" in resolved:
-                    raise RuntimeError(f"could not find the {VRSHELL} home activity: {resolved}")
-                outs.append(set_home(s, resolved.splitlines()[-1].strip()))
-            problems = [o for o in outs if "Exception" in o or "Error" in o]
+        def broadcast(s, on):
+            return adb.shell(
+                s, f"am broadcast -n {adb.package}/.KioskReceiver --ez on {'true' if on else 'false'}", check=False)
+
+        def vrshell_disabled(s):
+            listing = adb.shell(s, "pm list packages -d", check=False)
+            return f"package:{VRSHELL}" in [line.strip() for line in listing.splitlines()]
+
+        def current_home(s):
+            return (adb.shell(s, resolve_home, check=False).splitlines() or [""])[-1].strip()
+
+        def fail_on(outs):
+            problems = [o for o in outs if "Exception" in o or "Error" in o or "Permission Denial" in o]
             if problems:
                 raise RuntimeError("; ".join(problems))
+
+        def enable_vrshell(s):
+            adb.shell(s, f"pm enable {VRSHELL}", check=False)
+            if vrshell_disabled(s):
+                adb.shell(s, f"pm enable --user 0 {VRSHELL}", check=False)
+            if vrshell_disabled(s):
+                raise RuntimeError(
+                    f"{VRSHELL} is still disabled (listed by 'pm list packages -d'); "
+                    f"run 'kiosk restore --root' over USB")
+
+        def kiosk_on(s):
+            if args.root:
+                adb.run(s, "root")
+                adb.run(s, "wait-for-device")
+                outs = [adb.shell(s, f"pm disable {VRSHELL}", check=False)]
+                outs.append(broadcast(s, True))
+                set_home(s, alias)
+                adb.run(s, "unroot")
+                adb.run(s, "wait-for-device")
+                set_home(s, alias)
+            else:
+                outs = [adb.shell(s, f"pm disable-user --user 0 {VRSHELL}", check=False)]
+                outs.append(broadcast(s, True))
+                set_home(s, alias)
+            fail_on(outs)
+            home = current_home(s)
+            if not home.startswith(f"{adb.package}/"):
+                raise RuntimeError(f"home is {home or 'unresolved'}, not the player; "
+                                   f"pick SyncVR in the home chooser, or run 'kiosk on --root' over USB")
+
+        def kiosk_off(s, restore):
+            if restore and args.root:
+                adb.run(s, "root")
+                adb.run(s, "wait-for-device")
+            try:
+                if restore:
+                    adb.shell(s, f"pm unhide {VRSHELL}", check=False)
+                enable_vrshell(s)
+                outs = [broadcast(s, False), set_home(s, vrshell_home)]
+                fail_on(outs)
+                home = current_home(s)
+                if not home.startswith(f"{VRSHELL}/"):
+                    raise RuntimeError(f"home is {home or 'unresolved'}, not {VRSHELL}; "
+                                       f"run 'kiosk restore' (add --root over USB)")
+                adb.shell(s, "am start -a android.intent.action.MAIN -c android.intent.category.HOME", check=False)
+            finally:
+                if restore and args.root:
+                    adb.run(s, "unroot", check=False)
+                    adb.run(s, "wait-for-device", check=False)
+
+        def kiosk(s):
+            if args.state == "on":
+                kiosk_on(s)
+            else:
+                kiosk_off(s, args.state == "restore")
             return f"kiosk {args.state}"
         return for_each(serials, kiosk)
     if cmd == "reboot":
@@ -271,7 +321,8 @@ def add_arguments(p: argparse.ArgumentParser) -> None:
     x = sub.add_parser("connect", help="connect to headsets over Wi-Fi ADB")
     x.add_argument("addresses", nargs="+")
     x = sub.add_parser("kiosk", help="make the player the headset's home app (or restore the Oculus home)")
-    x.add_argument("state", choices=("on", "off"))
+    x.add_argument("state", choices=("on", "off", "restore"),
+                   help="restore: off plus pm unhide (and pm enable as root with --root)")
     x.add_argument("--root", action="store_true", help="use the adb root recipe (USB only; survives more resets)")
     sub.add_parser("reboot", help="reboot the headsets")
     x = sub.add_parser("shell", help="run a shell command on every headset")

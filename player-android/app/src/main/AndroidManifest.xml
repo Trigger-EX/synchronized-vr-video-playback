@@ -37,12 +37,26 @@
                 <category android:name="android.intent.category.LAUNCHER" />
                 <category android:name="com.oculus.intent.category.VR" />
             </intent-filter>
-            <!-- Lets `adb kiosk on` make this the home app (see docs/HEADSET_SETUP.md). -->
+        </activity>
+
+        <!-- Home role for kiosk mode. Disabled by default so the headset keeps its normal home;
+             `adb kiosk on/off` toggles it through KioskReceiver (see docs/HEADSET_SETUP.md). -->
+        <activity-alias
+            android:name=".HomeAlias"
+            android:enabled="false"
+            android:exported="true"
+            android:targetActivity=".MainActivity">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.HOME" />
                 <category android:name="android.intent.category.DEFAULT" />
             </intent-filter>
-        </activity>
+        </activity-alias>
+
+        <!-- Only shell/adb holds DUMP, so apps cannot toggle kiosk mode. -->
+        <receiver
+            android:name=".KioskReceiver"
+            android:exported="true"
+            android:permission="android.permission.DUMP" />
     </application>
 </manifest>
