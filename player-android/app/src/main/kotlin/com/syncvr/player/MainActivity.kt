@@ -1,7 +1,6 @@
 package com.syncvr.player
 
 import android.app.Activity
-import android.net.Uri
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
@@ -10,16 +9,13 @@ import android.view.Surface
 import android.view.SurfaceHolder
 import android.view.SurfaceView
 import android.view.WindowManager
-import androidx.media3.common.MediaItem
-import androidx.media3.common.PlaybackException
-import androidx.media3.common.Player
-import androidx.media3.common.VideoSize
-import androidx.media3.exoplayer.ExoPlayer
 import com.syncvr.player.core.DisplayMode
 import com.syncvr.player.core.ModeCycle
 import com.syncvr.player.core.PanelText
 import com.syncvr.player.core.PlayerInfo
 import com.syncvr.player.core.VideoSelection
+import com.syncvr.player.core.sync.VideoCommand
+import com.syncvr.player.core.sync.VideoFiles
 import java.io.File
 
 /**
@@ -32,9 +28,8 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
     private val panel = PanelRenderer()
 
     private var handle = 0L
-    private var player: ExoPlayer? = null
+    private var player: ExoVideoPlayer? = null
     private var videoFile: File? = null
-    private var playerError: String? = null
     private var resumed = false
 
     private var videoSurface: Surface? = null
@@ -50,6 +45,8 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
     }
     private val panelTick = object : Runnable {
         override fun run() {
+            // Demo behaviour until the sync engine drives playback: start once the decoder is ready.
+            player?.let { if (resumed && it.isPrepared && !it.isPlaying) it.play() }
             redrawPanel()
             main.postDelayed(this, PANEL_REFRESH_MS)
         }
@@ -94,10 +91,7 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
 
     override fun onDestroy() {
         main.removeCallbacksAndMessages(null)
-        player?.let {
-            it.clearVideoSurface()
-            it.release()
-        }
+        player?.release()
         player = null
         panel.setSurface(null)
         videoSurface = null
@@ -152,30 +146,23 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
         val file = File(dir, picked)
         videoFile = file
         Log.i(TAG, "Playing ${file.absolutePath}")
-        val exo = ExoPlayer.Builder(this).build()
-        exo.addListener(object : Player.Listener {
-            override fun onPlayerError(error: PlaybackException) {
-                playerError = "${error.errorCodeName}: ${error.message}"
-                Log.e(TAG, "ExoPlayer error: $playerError", error)
-                redrawPanel()
-            }
-
-            override fun onVideoSizeChanged(videoSize: VideoSize) {
-                if (videoSize.width <= 0 || videoSize.height <= 0) return
-                val aspect = videoSize.width * videoSize.pixelWidthHeightRatio / videoSize.height
-                Log.i(TAG, "Video size ${videoSize.width}x${videoSize.height} aspect=$aspect")
+        val exo = ExoVideoPlayer(
+            this,
+            resolveFile = { name ->
+                VideoFiles.resolve(name, dir.list()?.toList().orEmpty())?.let { File(dir, it) }
+            },
+            onVideoAspect = { aspect ->
+                Log.i(TAG, "Video aspect=$aspect")
                 if (handle != 0L) NativeBridge.nativeSetVideoAspect(handle, aspect)
-            }
-
-            override fun onPlaybackStateChanged(playbackState: Int) {
-                Log.i(TAG, "Playback state ${stateName(playbackState)}")
-            }
-        })
-        exo.repeatMode = Player.REPEAT_MODE_ONE
-        exo.setMediaItem(MediaItem.fromUri(Uri.fromFile(file)))
-        exo.playWhenReady = true
-        exo.prepare()
+            },
+            onPlayerEvent = { msg ->
+                Log.e(TAG, msg)
+                redrawPanel()
+            },
+        )
+        exo.load(VideoCommand(video = picked, loop = true))
         player = exo
+        applyMode(mode)
     }
 
     private fun applyMode(newMode: DisplayMode) {
@@ -183,10 +170,7 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
         Log.i(TAG, "Mode -> ${mode.label()}")
         if (handle != 0L) NativeBridge.nativeSetMode(handle, mode.ordinal)
         val target = if (mode.usesCompositorSurface) videoSurface else sphereSurface
-        val exo = player
-        if (exo != null) {
-            if (target != null && target.isValid) exo.setVideoSurface(target) else exo.clearVideoSurface()
-        }
+        player?.setSurface(target)
         redrawPanel()
     }
 
@@ -197,19 +181,15 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
         val line2 = if (file == null) {
             "No video in ${PlayerInfo.VIDEO_DIR}"
         } else {
-            PanelText.videoLine(file.name, exo?.currentPosition ?: 0L, exo?.duration ?: -1L)
+            PanelText.videoLine(
+                file.name,
+                ((exo?.time ?: 0.0) * 1000).toLong(),
+                if (exo != null && exo.length > 0) (exo.length * 1000).toLong() else -1L,
+            )
         }
         val nativeStatus = if (handle != 0L) NativeBridge.nativeGetStatus(handle) else "native not running"
-        val line3 = playerError?.let { "Player error: $it" } ?: nativeStatus
+        val line3 = player?.error?.let { "Player error: $it" } ?: nativeStatus
         panel.draw(mode.label(), line2, line3)
-    }
-
-    private fun stateName(state: Int) = when (state) {
-        Player.STATE_IDLE -> "idle"
-        Player.STATE_BUFFERING -> "buffering"
-        Player.STATE_READY -> "ready"
-        Player.STATE_ENDED -> "ended"
-        else -> state.toString()
     }
 
     private companion object {
