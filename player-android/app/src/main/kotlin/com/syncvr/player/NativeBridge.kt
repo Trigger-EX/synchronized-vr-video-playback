@@ -6,8 +6,6 @@ object NativeBridge {
         System.loadLibrary("syncvr_native")
     }
 
-    @JvmStatic external fun vrApiVersion(): String
-
     /** Starts the render thread; returns 0 on failure. Native calls MainActivity.onNativeSurfacesReady. */
     @JvmStatic external fun nativeCreate(activity: MainActivity): Long
 

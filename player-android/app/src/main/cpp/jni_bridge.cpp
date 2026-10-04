@@ -15,10 +15,6 @@ syncvr::App* FromHandle(jlong handle) {
 
 extern "C" {
 
-JNIEXPORT jstring JNICALL Java_com_syncvr_player_NativeBridge_vrApiVersion(JNIEnv* env, jclass) {
-    return env->NewStringUTF(vrapi_GetVersionString());
-}
-
 JNIEXPORT jlong JNICALL Java_com_syncvr_player_NativeBridge_nativeCreate(JNIEnv* env, jclass,
                                                                          jobject activity) {
     syncvr::App* app = new syncvr::App(env, activity);
