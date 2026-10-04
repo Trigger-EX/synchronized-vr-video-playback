@@ -15,6 +15,7 @@ replaces the other.
 **Quick path:** download the APK (below), then with headsets on USB, from `server/`:
 
 ```bash
+cd server && python3 -m pip install -e .          # use a venv (python3 -m venv .venv) if pip is externally-managed
 python3 -m syncvr adb setup ../SyncVRPlayer.apk   # install, write config, proximity off, launch
 python3 -m syncvr adb push ../content/*.mp4       # optional: USB preload
 python3 -m syncvr serve                           # headsets appear in the dashboard
