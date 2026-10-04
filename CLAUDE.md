@@ -12,7 +12,7 @@ Commands
 One session = one task. Every message re-sends the whole conversation, so keep context small.
 
 Starting
-- If my first message says "continue" or mentions the handoff, read docs/handoff.md on the current branch and resume from its Next step. Don't re-explore what it already covers.
+- At the start of every session, if docs/handoff.md exists on the current branch, read it first for context on the project, unless I explicitly say not to. Don't re-explore what it covers. If my first message gives no task (for example "go" or "continue"), resume from its Next step.
 - Read files selectively by path. Search before opening large files.
 
 Working
@@ -27,7 +27,7 @@ Workflows
 - In every workflow, name a model for each stage: haiku for discovery, searches, and build or test runs; sonnet for implementation; opus only for design decisions or a final review. Use lower effort for routine stages where the workflow allows it.
 - Keep each workflow as small as the task allows. When starting one, state its stages and roughly how many agents it will use in one line.
 
-Ending: say "Good point to start a new session" and run the handoff skill when any of these happen:
+Ending: run the cp skill when any of these happen:
 - the current task is done (PR opened, or work committed and pushed)
 - I ask for something unrelated to the current task
 - the conversation has been auto-compacted
