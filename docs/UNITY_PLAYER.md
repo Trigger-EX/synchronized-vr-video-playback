@@ -1,8 +1,8 @@
-# Unity player (fallback)
+# Unity player (legacy fallback)
 
 The original headset app, a Unity 2019.4 LTS project in [`headset/`](../headset). It is being
-replaced by the native player ([HEADSET_SETUP.md](HEADSET_SETUP.md)) and stays only as a fallback
-until the native player can run a show (phase 1B). It is removed in phase 5 of
+replaced by the native player ([HEADSET_SETUP.md](HEADSET_SETUP.md), no Unity needed) and stays only
+as a fallback until the native player has run real shows. It is removed in phase 5 of
 [EXECUTION_PLAN.md](EXECUTION_PLAN.md). Both apps use the package `com.syncvr.player`, so
 installing one replaces the other.
 
