@@ -2,7 +2,6 @@
 
 Synchronized video playback for Oculus Go fleets: Python server + dashboard (`server/`),
 native Kotlin/C++ Go player (`player-android/`), docs in `docs/` (start with `docs/EXECUTION_PLAN.md`).
-The old Unity project in `headset/` is legacy and being retired; don't build, test or extend it.
 
 ## Session hygiene
 
@@ -11,6 +10,11 @@ Commands
 - Test: `(cd server && python3 -m pytest -q)` and `(cd player-android && ./gradlew --no-daemon :core:test)`
 
 Every message re-sends the whole conversation, so keep context small.
+
+Branches
+- Work on the branch I selected for this session. In a cloud session, if you start on an auto-created session branch, git fetch and check out the branch I selected before making changes; if you can't tell which branch that is, ask me once.
+- Commit and push to that branch. Never create branches, open, merge or comment on pull requests, or switch branches unless I ask.
+- If a push to that branch is refused, push to the session branch instead and tell me in one line. Don't open a PR.
 
 Starting
 - At the start of every session, if docs/handoff.md exists on the current branch, read it first for context on the project, unless I explicitly say not to. Don't re-explore what it covers. If my first message gives no task (for example "go" or "continue"), resume from its Next step.
@@ -38,7 +42,7 @@ Workflows
 - Keep each workflow as small as the task allows. When starting one, state its stages and roughly how many agents it will use in one line.
 
 Pull requests
-- Before a PR into the default branch is marked ready for review, delete docs/handoff.md and docs/plan.md in a final commit.
+- Only when I ask you to open a PR into the default branch: delete docs/handoff.md and docs/plan.md in a final commit first.
 
 # Compact instructions
 When compacting, keep the goal, decisions made, file paths touched, failing test names and errors, and the next step. Drop exploration that led nowhere.
