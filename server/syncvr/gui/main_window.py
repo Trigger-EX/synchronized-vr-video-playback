@@ -1,9 +1,8 @@
-"""Main operator window: tabs, status bar and (later) the playback panel."""
+"""Main operator window: tabs, status bar and the playback panel."""
 
 import time
 from pathlib import Path
 
-from PySide6.QtCore import Qt
 from PySide6.QtGui import QAction
 from PySide6.QtWidgets import QLabel, QMainWindow, QTabWidget, QVBoxLayout, QWidget
 
@@ -11,19 +10,12 @@ from ..launcher import open_path
 from . import format as fmt
 from .headsets import HeadsetsTab
 from .library import LibraryTab
+from .log import LogTab
 from .playback import PlaybackPanel
+from .settings import SettingsTab
 
 TABS = ("Headsets", "Library", "Settings", "Log")
 STATUS_MS = 5000
-
-
-def _placeholder(text: str) -> QWidget:
-    w = QWidget()
-    lay = QVBoxLayout(w)
-    label = QLabel(text)
-    label.setAlignment(Qt.AlignCenter)
-    lay.addWidget(label)
-    return w
 
 
 class MainWindow(QMainWindow):
@@ -41,9 +33,10 @@ class MainWindow(QMainWindow):
         self.tabs = QTabWidget()
         self.headsets = HeadsetsTab(self)
         self.library = LibraryTab(self)
-        self.tab_widgets = {"Headsets": self.headsets, "Library": self.library}
+        self.tab_widgets = {"Headsets": self.headsets, "Library": self.library,
+                            "Settings": SettingsTab(self), "Log": LogTab(self)}
         for name in TABS:
-            self.tabs.addTab(self.tab_widgets.get(name) or _placeholder(name), name)
+            self.tabs.addTab(self.tab_widgets[name], name)
         self.playback = PlaybackPanel(self)
         central = QWidget()
         lay = QVBoxLayout(central)
