@@ -14,10 +14,11 @@ Replace the Unity headset app with a native Oculus Go player, following docs/EXE
 - Phase 1A and 3.1 done and merged to `main`.
 - User's first hardware run crashed instantly: SIGABRT "vrapi_GetVersionString was called before vrapi_Initialize()" from `MainActivity.onCreate` → `NativeBridge.vrApiVersion()`.
 - Fixed in 7145102 on branch `code/serene-albattani-a6633i` (removed the JNI `vrApiVersion` and its call; native `LogDiagnostics` already logs the version after init). Files: cpp/jni_bridge.cpp, MainActivity.kt, NativeBridge.kt. No PR yet. Not yet verified on hardware.
+- CI green on 0af6f40 (run 37169127216). APK given to user: https://github.com/Trigger-EX/synchronized-vr-video-playback/actions/runs/37169127216/artifacts/11290178126 (expires 2027-01-02).
 
 ## Open questions
 - Checkpoint 1 results (display path, orientation, panel placement, decoder limits, pause behavior; see docs/HEADSET_SETUP.md).
 - Any further crash after this fix.
 
 ## Next step
-Confirm CI is green on `code/serene-albattani-a6633i` and give the user the new SyncVRPlayer-apk link. If they send a new crash log, fix it; if they send Checkpoint 1 results, apply them (display path, HW CHECK spots in cpp/layers.cpp, limits.py). Otherwise start Phase 1B step 1.
+Wait for the user's hardware run of the new APK. If they send a crash log, fix it; if they send Checkpoint 1 results, apply them (display path, HW CHECK spots in cpp/layers.cpp, limits.py). Otherwise start Phase 1B step 1.
