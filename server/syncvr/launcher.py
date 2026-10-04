@@ -1,10 +1,11 @@
-"""Clickable PC launcher: runs the server in a background thread with a small Tk control window.
+"""Clickable PC launcher: runs the server in a background thread with a small Qt (PySide6) control window.
 
-Falls back to console mode when tkinter or a display is missing. Importing this module needs neither
-tkinter nor aiohttp; both are loaded lazily.
+Falls back to console mode when PySide6 or a display is missing. Importing this module needs neither
+PySide6 nor aiohttp; both are loaded lazily.
 """
 
 import asyncio
+import concurrent.futures
 import json
 import logging
 import logging.handlers
@@ -185,6 +186,18 @@ class ServerThread:
         except Exception:
             return None
 
+    def snapshot_async(self) -> Optional["concurrent.futures.Future"]:
+        """Future for a controller snapshot taken on the server loop; None if not running."""
+        if not self.running or self.server is None or self.loop is None:
+            return None
+
+        async def take():
+            return self.server.controller.snapshot()
+        try:
+            return asyncio.run_coroutine_threadsafe(take(), self.loop)
+        except RuntimeError:  # loop closed
+            return None
+
     def stop(self, timeout: float = 5.0) -> bool:
         """Stop the server and join the thread; True if it ended in time."""
         if self.loop is not None and self._stop is not None and self.running:
@@ -218,25 +231,14 @@ def _make_config(args):
     return cfg, bool(ov.get("open_browser", True))
 
 
-def _offer_install(message: str, tk_ok: bool) -> bool:
-    """aiohttp is missing: offer to pip install it. Returns True if it is importable afterwards."""
-    install = False
-    if tk_ok:
-        try:
-            import tkinter
-            from tkinter import messagebox
-            root = tkinter.Tk()
-            root.withdraw()
-            install = messagebox.askyesno("SyncVR", message + "\n\nInstall it now?", icon="question")
-            root.destroy()
-        except Exception:
-            tk_ok = False
-    if not tk_ok:
-        print(message)
-        try:
-            install = input("Install now? [y/N] ").strip().lower().startswith("y")
-        except (EOFError, OSError):
-            install = False
+def _offer_install(message: str) -> bool:
+    """aiohttp is missing: offer (console only) to pip install it. True if importable afterwards."""
+    print(message)
+    print("Normally start-syncvr.sh / Start SyncVR.pyw set this up in server/.venv for you.")
+    try:
+        install = input("Install now? [y/N] ").strip().lower().startswith("y")
+    except (EOFError, OSError):
+        install = False
     if not install:
         return False
     cmd = [sys.executable, "-m", "pip", "install", "--user", "aiohttp"]
@@ -253,15 +255,33 @@ def _offer_install(message: str, tk_ok: bool) -> bool:
         return False
 
 
-def tk_available() -> bool:
-    """True when tkinter imports and a window can actually be created."""
-    try:
-        import tkinter
-        root = tkinter.Tk()
-        root.destroy()
-        return True
-    except Exception:  # ImportError, TclError (no DISPLAY), ...
+_QT_PROBE = "from PySide6.QtWidgets import QApplication; QApplication([])"
+
+
+def qt_available(console: bool = False) -> bool:
+    """True when PySide6 imports and a Qt window can actually be created."""
+    if console:
         return False
+    try:
+        __import__("PySide6")  # import, not find_spec: a broken install must count as missing
+    except ImportError:
+        return False
+    if sys.platform.startswith("linux") and not (os.environ.get("DISPLAY") or os.environ.get("WAYLAND_DISPLAY")):
+        if os.environ.get("QT_QPA_PLATFORM", "") not in ("offscreen", "minimal"):
+            return False
+    # A missing platform plugin (xcb) aborts the whole process, so probe in a child process.
+    kwargs = {}
+    if sys.platform.startswith("win"):
+        kwargs["creationflags"] = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+    try:
+        res = subprocess.run([sys.executable, "-c", _QT_PROBE], stdout=subprocess.DEVNULL,
+                             stderr=subprocess.DEVNULL, timeout=15, **kwargs)
+    except (OSError, subprocess.SubprocessError):
+        return False
+    if res.returncode != 0:
+        log.warning("Qt could not start (on Linux try: sudo apt install libxcb-cursor0)")
+        return False
+    return True
 
 
 def run_console(thread: ServerThread, url: str, log_path: Path) -> None:
@@ -273,67 +293,13 @@ def run_console(thread: ServerThread, url: str, log_path: Path) -> None:
         pass
 
 
-def run_window(thread: ServerThread, config, url_local: str, log_path: Path) -> None:
-    import tkinter as tk
-
-    root = tk.Tk()
-    root.title("SyncVR")
-    root.resizable(False, False)
-    status = tk.StringVar(value="Starting...")
-    tk.Label(root, text="SyncVR server is running", font=("TkDefaultFont", 13, "bold")).pack(padx=20, pady=(14, 4))
-    tk.Label(root, textvariable=status, justify="left", anchor="w").pack(padx=20, pady=4, fill="x")
-    box = tk.Frame(root)
-    box.pack(padx=20, pady=(8, 14), fill="x")
-    state = {"snap": None, "closing": False}
-
-    def current_url() -> str:
-        return dashboard_url(state["snap"], thread.http_port)
-
-    buttons = [("Open dashboard", lambda: open_path(url_local)),
-               ("Open content folder", lambda: open_path(Path(config.content_dir).resolve())),
-               ("Open log", lambda: open_path(log_path)),
-               ("Stop & quit", lambda: quit_now())]
-    for text, cmd in buttons:
-        tk.Button(box, text=text, command=cmd, width=26).pack(pady=2, fill="x")
-
-    def refresh():
-        if state["closing"]:
-            return
-        if not thread.running:
-            status.set("The server stopped. See the log for details.")
-            return
-        # snapshot() blocks briefly on the server loop; keep it off the Tk thread when slow.
-        state["snap"] = thread.snapshot(timeout=0.5) or state["snap"]
-        status.set("\n".join(status_lines(state["snap"], current_url())))
-        root.after(REFRESH_MS, refresh)
-
-    def quit_now():
-        if state["closing"]:
-            return
-        state["closing"] = True
-        status.set("Stopping...")
-        root.update_idletasks()
-        thread.stop(timeout=5.0)
-        root.destroy()
-
-    root.protocol("WM_DELETE_WINDOW", quit_now)
-    refresh()
-    try:
-        root.mainloop()
-    except KeyboardInterrupt:
-        pass
-    finally:
-        if not state["closing"]:
-            thread.stop(timeout=5.0)
-
-
 def main(args) -> int:
     """Entry point for ``python -m syncvr gui``."""
-    tk_ok = tk_available() if not args.console else False
+    qt_ok = qt_available(args.console)
     try:
         __import__("aiohttp")  # availability probe
     except ImportError:
-        if not _offer_install("SyncVR needs the 'aiohttp' package, which is not installed.", tk_ok):
+        if not _offer_install("SyncVR needs the 'aiohttp' package, which is not installed."):
             return 1
     config, open_browser = _make_config(args)
     log_path = setup_logging(config.data_dir, verbose=args.verbose)
@@ -350,17 +316,15 @@ def main(args) -> int:
     except Exception as exc:
         log.error("could not start the server: %s", exc)
         msg = "SyncVR could not start: %s\n\nSee %s" % (exc, log_path)
-        if tk_ok:
+        shown = False
+        if qt_ok:
             try:
-                import tkinter
-                from tkinter import messagebox
-                root = tkinter.Tk()
-                root.withdraw()
-                messagebox.showerror("SyncVR", msg)
-                root.destroy()
+                from .qt_ui import show_error
+                show_error("SyncVR", msg)
+                shown = True
             except Exception:
-                print(msg)
-        else:
+                pass
+        if not shown:
             print(msg)
         return 1
 
@@ -368,7 +332,8 @@ def main(args) -> int:
     if open_browser and not args.no_browser:
         open_path(local_url)
     try:
-        if tk_ok:
+        if qt_ok:
+            from .qt_ui import run_window
             run_window(thread, config, local_url, log_path)
         else:
             run_console(thread, local_url, log_path)

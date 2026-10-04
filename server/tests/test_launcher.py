@@ -95,8 +95,19 @@ def test_setup_logging_writes_file(tmp_path):
                 h.close()
 
 
-def test_import_without_tkinter(monkeypatch):
-    import importlib
-    monkeypatch.setitem(sys.modules, "tkinter", None)
-    importlib.reload(launcher)
-    assert launcher.tk_available() is False
+def test_import_without_pyside6(monkeypatch):
+    monkeypatch.setitem(sys.modules, "PySide6", None)
+    assert launcher.qt_available(False) is False
+    assert launcher.qt_available(True) is False
+
+
+def test_snapshot_async(tmp_path):
+    t = launcher.ServerThread(make_config(tmp_path))
+    assert t.snapshot_async() is None
+    t.start()
+    try:
+        fut = t.snapshot_async()
+        assert fut.result(5)["devices"] == []
+    finally:
+        t.stop()
+    assert t.snapshot_async() is None

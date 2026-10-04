@@ -6,6 +6,6 @@ here = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.join(here, "server"))
 os.chdir(os.path.join(here, "server"))
 
-from syncvr.__main__ import main  # noqa: E402
+from syncvr import bootstrap  # noqa: E402
 
-sys.exit(main(["gui"]))
+sys.exit(bootstrap.main(["gui"]))

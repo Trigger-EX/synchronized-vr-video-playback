@@ -92,11 +92,13 @@ The native player has run on hardware (see the status table below).
 ## Launcher (PC control window)
 
 Double-click instead of using a terminal: `Start SyncVR.desktop` (Linux; on Linux Mint's Nemo choose
-"Trust and launch" the first time, or run `./start-syncvr.sh`) or `Start SyncVR.pyw` (Windows; WSL users
-should start it from Windows, not from inside WSL). It runs the server, opens the dashboard once, and shows
+"Trust and launch" the first time, or run `./start-syncvr.sh`) `Start SyncVR.pyw` (Windows; WSL users
+should start it from Windows, not from inside WSL) or `Start SyncVR.command` (macOS; right-click > Open the
+first time). The first run creates `server/.venv` and downloads aiohttp and PySide6 (~100 MB; needs internet,
+and on Mint `sudo apt install python3-venv`; if the window fails to start, `sudo apt install libxcb-cursor0`). It runs the server, opens the dashboard once, and shows
 a window with the headset count, the dashboard URL and buttons Open dashboard / Open content folder /
 Open log / Stop & quit. Content goes in `server/content`, logs in `server/data/logs/syncvr.log`.
-Without tkinter or a display (`sudo apt install python3-tk`) it runs in the terminal instead. Starting it a
+Without PySide6 or a display it runs in the terminal instead (`SYNCVR_NO_VENV=1` skips the venv). Starting it a
 second time while port 8080 is taken just opens the running dashboard. Optional settings go in
 `server/data/launcher.json` (`content`, `http_port`, `name`, `password`, `open_browser`).
 
