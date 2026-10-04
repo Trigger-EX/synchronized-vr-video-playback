@@ -1,6 +1,6 @@
 // Builders for the compositor layers submitted every frame.
 //
-// Assumptions that need a headset to confirm are marked "HW CHECK" in layers.cpp.
+// Assumptions still needing headset confirmation are marked "UNVERIFIED:" in layers.cpp.
 #pragma once
 
 #include "VrApi.h"
