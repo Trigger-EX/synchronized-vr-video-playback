@@ -10,6 +10,7 @@ from PySide6.QtWidgets import QLabel, QMainWindow, QTabWidget, QVBoxLayout, QWid
 from ..launcher import open_path
 from . import format as fmt
 from .headsets import HeadsetsTab
+from .library import LibraryTab
 from .playback import PlaybackPanel
 
 TABS = ("Headsets", "Library", "Settings", "Log")
@@ -39,7 +40,8 @@ class MainWindow(QMainWindow):
 
         self.tabs = QTabWidget()
         self.headsets = HeadsetsTab(self)
-        self.tab_widgets = {"Headsets": self.headsets}
+        self.library = LibraryTab(self)
+        self.tab_widgets = {"Headsets": self.headsets, "Library": self.library}
         for name in TABS:
             self.tabs.addTab(self.tab_widgets.get(name) or _placeholder(name), name)
         self.playback = PlaybackPanel(self)
