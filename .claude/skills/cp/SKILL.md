@@ -14,7 +14,7 @@ description: Save a checkpoint to docs/handoff.md so a fresh session can continu
 4. If CLAUDE_CODE_REMOTE is "true", this is a cloud session:
    - Push the session branch.
    - The working branch is the branch this session started from. If it's the repository's default branch, or you can't tell which branch it was, don't merge; use the Cloud, not merged reply.
-   - Otherwise open a PR from the session branch into the working branch titled "Checkpoint: <goal>", or reuse the open one, and merge it with: gh pr merge --merge --delete-branch. Never merge into the default branch. If merging fails, leave the PR open and use the Cloud, not merged reply.
+   - Otherwise open a PR from the session branch into the working branch titled "Checkpoint: <goal>", or reuse the open one, and merge it. Use a built-in GitHub tool if one can merge pull requests; otherwise, if gh is installed, use the REST API: gh api -X PUT repos/<owner>/<repo>/pulls/<number>/merge -f merge_method=merge. Don't delete the branch. Never merge into the default branch. If merging fails, leave the PR open and use the Cloud, not merged reply.
 5. Reply in exactly one of these formats and nothing else. Suggested model: sonnet if the next step is implementing an existing plan or routine work; opus if it needs design decisions or subtle debugging.
 
 Local:
