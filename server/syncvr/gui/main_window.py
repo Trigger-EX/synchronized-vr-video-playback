@@ -9,6 +9,7 @@ from PySide6.QtWidgets import QLabel, QMainWindow, QTabWidget, QVBoxLayout, QWid
 
 from ..launcher import open_path
 from . import format as fmt
+from .playback import PlaybackPanel
 
 TABS = ("Headsets", "Library", "Settings", "Log")
 STATUS_MS = 5000
@@ -38,7 +39,12 @@ class MainWindow(QMainWindow):
         self.tabs = QTabWidget()
         for name in TABS:
             self.tabs.addTab(_placeholder(name), name)
-        self.setCentralWidget(self.tabs)
+        self.playback = PlaybackPanel(self)
+        central = QWidget()
+        lay = QVBoxLayout(central)
+        lay.addWidget(self.tabs, 1)
+        lay.addWidget(self.playback)
+        self.setCentralWidget(central)
 
         file_menu = self.menuBar().addMenu("&File")
         for text, handler in (("Open &content folder", lambda: open_path(Path(self._config.content_dir).resolve())),
@@ -75,6 +81,7 @@ class MainWindow(QMainWindow):
 
     def set_targets(self, ids) -> None:
         self.targets = list(ids)
+        self.playback.update_state()
 
     def on_state(self, snap) -> None:
         self.snapshot = snap
@@ -82,6 +89,7 @@ class MainWindow(QMainWindow):
         known = {d["id"] for d in snap.get("devices") or []}
         self.targets = [i for i in self.targets if i in known]
         self.update_status(snap)
+        self.playback.update_state()
 
     def update_status(self, snap) -> None:
         st = fmt.fleet_stats(snap.get("devices") or [])
