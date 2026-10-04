@@ -2,6 +2,8 @@
 
 #include <math.h>
 
+#include "modes.h"
+
 namespace syncvr {
 
 namespace {
@@ -27,6 +29,40 @@ void SetTextureMatrix(ovrMatrix4f* m, float sx, float sy, float tx, float ty) {
 // maps. The compositor re-projects with the latest head pose, so no further correction is needed.
 ovrMatrix4f WorldFixedTexCoords(const ovrMatrix4f& viewMatrix) {
     return ovrMatrix4f_TanAngleMatrixForCubeMap(&viewMatrix);
+}
+
+// Restricts one eye to its part of a packed texture and, for 180 content, stretches the front
+// half-sphere over the texture. (sx, sy, tx, ty) is the layer's own texture matrix (u' = sx*u + tx);
+// the result is written to `rect` and `matrix`.
+//
+// UNVERIFIED (no hardware): (a) eye order, assumed left eye = top half (tb) / left half (sbs),
+// texture v = 1 at the top as in the old top/bottom code; (b) 180 mapping: assumes the equirect
+// layer's u = 0.5 is straight ahead, so the 180-degree texture covers u in [0.25, 0.75], and that
+// coordinates outside the clip rect are not drawn.
+void ApplyEyeRegion(
+    ovrRectf* rect, ovrMatrix4f* matrix, float sx, float sy, float tx, float ty, int stereo,
+    bool half180, int eye) {
+    if (half180) {
+        // u_tex = 2 * u_full - 0.5
+        tx = 2.0f * tx - 0.5f;
+        sx *= 2.0f;
+    }
+    const bool left = (eye == VRAPI_FRAME_LAYER_EYE_LEFT);
+    float rx = 0.0f, ry = 0.0f, rw = 1.0f, rh = 1.0f;
+    if (stereo == kStereoTopBottom) {
+        // Rect and matrix both select the half; v = 1 is the top.
+        ry = left ? 0.5f : 0.0f;
+        rh = 0.5f;
+        sy *= 0.5f;
+        ty = ty * 0.5f + ry;
+    } else if (stereo == kStereoSideBySide) {
+        rx = left ? 0.0f : 0.5f;
+        rw = 0.5f;
+        sx *= 0.5f;
+        tx = tx * 0.5f + rx;
+    }
+    *rect = {rx, ry, rw, rh};
+    SetTextureMatrix(matrix, sx, sy, tx, ty);
 }
 
 }  // namespace
@@ -79,7 +115,7 @@ ovrTracking2 RecenteredTracking(const ovrTracking2& tracking, float yaw) {
 }
 
 ovrLayerEquirect2 MakeEquirectLayer(
-    const ovrTracking2& tracking, ovrTextureSwapChain* chain, bool stereoTopBottom, float yaw) {
+    const ovrTracking2& tracking, ovrTextureSwapChain* chain, int stereo, bool half180, float yaw) {
     ovrLayerEquirect2 layer = vrapi_DefaultLayerEquirect2();
     layer.HeadPose = tracking.HeadPose;
     const ovrMatrix4f plainView = vrapi_GetViewMatrixFromPose(&tracking.HeadPose.Pose);
@@ -89,18 +125,10 @@ ovrLayerEquirect2 MakeEquirectLayer(
     for (int eye = 0; eye < VRAPI_FRAME_LAYER_EYE_MAX; eye++) {
         layer.Textures[eye].ColorSwapChain = chain;
         layer.Textures[eye].SwapChainIndex = 0;
-        if (stereoTopBottom) {
-            // UNVERIFIED: eye order. Assumes texture v = 1 is the top row (OpenGL convention),
-            // so left eye = top half, right eye = bottom half. Hardware showed each eye gets one
-            // half of a mono frame, but this was not checked with a real top/bottom 3D video.
-            if (eye == VRAPI_FRAME_LAYER_EYE_LEFT) {
-                layer.Textures[eye].TextureRect = {0.0f, 0.5f, 1.0f, 0.5f};
-                SetTextureMatrix(&layer.Textures[eye].TextureMatrix, 1.0f, 0.5f, 0.0f, 0.5f);
-            } else {
-                layer.Textures[eye].TextureRect = {0.0f, 0.0f, 1.0f, 0.5f};
-                SetTextureMatrix(&layer.Textures[eye].TextureMatrix, 1.0f, 0.5f, 0.0f, 0.0f);
-            }
-        }
+        // Hardware showed (Checkpoint 1) that each eye gets one half of a mono frame with the
+        // top/bottom rect + matrix below; eye order is still UNVERIFIED (see ApplyEyeRegion).
+        ApplyEyeRegion(&layer.Textures[eye].TextureRect, &layer.Textures[eye].TextureMatrix,
+                       1.0f, 1.0f, 0.0f, 0.0f, stereo, half180, eye);
     }
     layer.Header.Flags |= VRAPI_FRAME_LAYER_FLAG_CLIP_TO_TEXTURE_RECT;
     return layer;
@@ -111,7 +139,8 @@ ovrLayerCylinder2 MakeCylinderLayer(
     ovrTextureSwapChain* chain,
     const ScreenPlacement& placement,
     bool opaque,
-    bool chromaticAberrationCorrection) {
+    bool chromaticAberrationCorrection,
+    int stereo) {
     ovrLayerCylinder2 layer = vrapi_DefaultLayerCylinder2();
     layer.HeadPose = tracking.HeadPose;
     layer.Header.Flags |= VRAPI_FRAME_LAYER_FLAG_CLIP_TO_TEXTURE_RECT;
@@ -147,7 +176,10 @@ ovrLayerCylinder2 MakeCylinderLayer(
         layer.Textures[eye].ColorSwapChain = chain;
         layer.Textures[eye].SwapChainIndex = 0;
         layer.Textures[eye].TexCoordsFromTanAngles = WorldFixedTexCoords(tracking.Eye[eye].ViewMatrix);
-        SetTextureMatrix(&layer.Textures[eye].TextureMatrix, sx, sy, -u0 * sx, -v0 * sy);
+        // Mono keeps the full texture rect (as verified on hardware); packed stereo (flat sbs/tb)
+        // is UNVERIFIED, see ApplyEyeRegion.
+        ApplyEyeRegion(&layer.Textures[eye].TextureRect, &layer.Textures[eye].TextureMatrix,
+                       sx, sy, -u0 * sx, -v0 * sy, stereo, false, eye);
     }
     return layer;
 }

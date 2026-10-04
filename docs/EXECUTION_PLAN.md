@@ -44,8 +44,9 @@ Goal: answer the risky questions about the Go before building everything on top 
    cylinder (flat screen) and a small text panel.
 4. **Video.** ExoPlayer (Media3) decodes the file straight into the swapchain's surface.
 5. **Text panel.** Drawn with Android's `Canvas` into a second surface layer.
-6. **Diagnostic mode.** The skeleton plays the first video in the headset's video folder and cycles
-   every 15 s through: equirect layer → fallback sphere drawn by the app → flat cylinder → stereo
+6. **Diagnostic mode.** The skeleton plays the first video in the headset's video folder. The 15 s
+   cycle is now only a debug option (`--ez cycle_modes true`); normally the mode follows each video's
+   projection/stereo (and live `view` messages). The cycle goes through: equirect layer → fallback sphere drawn by the app → flat cylinder → stereo
    top/bottom. Each mode is labelled on screen. It also logs VrApi and system versions, decoder
    limits (H.264/HEVC maximum sizes) and supported refresh rates to `logcat`.
 7. **CI.** A new job builds the APK (Android SDK and NDK come preinstalled on GitHub's runners),

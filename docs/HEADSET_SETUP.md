@@ -151,8 +151,12 @@ python3 -m syncvr adb kiosk restore --root # also runs pm enable as root; USB on
 
 ## Checkpoint 1 (hardware check)
 
-The player still cycles through four ways of showing a video (it keeps doing so while connected). The goal is to
-find out which display path works on the Go. It takes about 15 minutes with one headset.
+Normally the player shows each video in the view set for it on the server (projection `360`, `180` or `flat`;
+stereo `mono`, `tb` or `sbs`; changes on the dashboard apply live, unknown values show as 360 mono) and does
+not cycle. For this check, launch it in the debug cycle mode, which steps through four ways of showing a video:
+`adb shell am start -n com.syncvr.player/.MainActivity --ez cycle_modes true`. The goal is to find out
+which display path works on the Go. The 180 and side-by-side mappings and the eye order are not yet confirmed
+on hardware: also check one 180 video and one SBS video in normal mode. It takes about 15 minutes with one headset.
 
 ### Install and copy a video
 
@@ -170,7 +174,7 @@ a second run (rename it so it sorts first, or push it alone).
 
 ### Watch the four modes
 
-Put the headset on. Every **15 seconds** it switches to the next mode and loops. A small text
+Put the headset on. In cycle mode it switches every **15 seconds** to the next mode and loops. A small text
 panel in front of you names the current mode (for example "1/4 Equirect layer (mono)"):
 
 | # | Panel label | What you should see if it works |

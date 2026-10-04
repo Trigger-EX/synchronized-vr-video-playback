@@ -14,6 +14,11 @@ import java.util.concurrent.ConcurrentLinkedQueue
 interface PlayerHost {
     /** A play/pause command arrived (projection, stereo and rotation tell the app how to show it). */
     fun onVideoCommand(cmd: VideoCommand) {}
+    /**
+     * The operator changed the view of [video] while it is loaded (`view` message). Not called for
+     * a video that is not currently loaded.
+     */
+    fun onViewCommand(video: String, projection: String, stereo: String, rotation: Double) {}
     fun setVolume(volume: Double) {}
     fun recenter() {}
     /** [seconds] 0 clears the message. */
@@ -102,6 +107,13 @@ class PlayerController(
             "play" -> VideoCommand.from(m).let { host.onVideoCommand(it); engine.onPlay(it) }
             "pause" -> VideoCommand.from(m).let { host.onVideoCommand(it); engine.onPause(it) }
             "stop" -> engine.onStop()
+            "view" -> {
+                val v = m.video
+                if (v != null && v == player.loadedVideo) {
+                    val c = VideoCommand.from(m)
+                    host.onViewCommand(v, c.projection, c.stereo, c.rotation)
+                }
+            }
             "volume" -> {
                 volume = m.value.coerceIn(0.0, 1.0)
                 host.setVolume(volume)

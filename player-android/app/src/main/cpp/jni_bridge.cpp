@@ -56,8 +56,12 @@ JNIEXPORT void JNICALL Java_com_syncvr_player_NativeBridge_nativeSurfaceDestroye
 }
 
 JNIEXPORT void JNICALL Java_com_syncvr_player_NativeBridge_nativeSetMode(JNIEnv*, jclass,
-                                                                         jlong handle, jint mode) {
-    if (syncvr::App* app = FromHandle(handle)) app->SetMode(static_cast<int>(mode));
+                                                                         jlong handle, jint mode,
+                                                                         jint stereo,
+                                                                         jboolean half180) {
+    if (syncvr::App* app = FromHandle(handle)) {
+        app->SetMode(static_cast<int>(mode), static_cast<int>(stereo), half180 == JNI_TRUE);
+    }
 }
 
 JNIEXPORT void JNICALL Java_com_syncvr_player_NativeBridge_nativeSetVideoAspect(JNIEnv*, jclass,

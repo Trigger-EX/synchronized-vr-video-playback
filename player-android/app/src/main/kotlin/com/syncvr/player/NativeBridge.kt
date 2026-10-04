@@ -20,8 +20,11 @@ object NativeBridge {
 
     @JvmStatic external fun nativeSurfaceDestroyed(handle: Long)
 
-    /** Mode number is DisplayMode.ordinal (see native modes.h). */
-    @JvmStatic external fun nativeSetMode(handle: Long, mode: Int)
+    /**
+     * [mode] is DisplayMode.ordinal, [stereo] is ViewStereo.code, [half180] marks a 180-degree
+     * half-sphere video (see native modes.h).
+     */
+    @JvmStatic external fun nativeSetMode(handle: Long, mode: Int, stereo: Int, half180: Boolean)
 
     @JvmStatic external fun nativeSetVideoAspect(handle: Long, aspect: Float)
 

@@ -41,7 +41,8 @@ public:
     void OnSurfaceChanged(JNIEnv* env, jobject surface);
     void OnSurfaceDestroyed();
 
-    void SetMode(int mode);
+    // mode: Mode (modes.h); stereo: Stereo; half180: the video is a 180-degree half-sphere.
+    void SetMode(int mode, int stereo, bool half180);
     void SetVideoAspect(float aspect);
     // Operator "recenter": the next frame's head direction becomes the front of all content.
     void Recenter();
@@ -80,6 +81,8 @@ private:
     ANativeWindow* window_ = nullptr;  // main-thread reference, guarded by mutex_
 
     std::atomic<int> mode_{0};
+    std::atomic<int> stereo_{0};
+    std::atomic<bool> half180_{false};
     std::atomic<float> videoAspect_{16.0f / 9.0f};
     std::atomic<bool> recenterRequested_{false};
     std::atomic<bool> panelProminent_{false};

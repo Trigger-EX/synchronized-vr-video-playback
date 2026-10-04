@@ -23,11 +23,15 @@ import kotlin.test.assertTrue
 private class RecordingHost : PlayerHost {
     val commands = ArrayList<VideoCommand>()
     val volumes = ArrayList<Double>()
+    val views = ArrayList<List<Any>>()
     var recenters = 0
     val messages = ArrayList<Pair<String?, Double>>()
     val identifies = ArrayList<Pair<String, Double>>()
     val names = ArrayList<Pair<String, String>>()
     override fun onVideoCommand(cmd: VideoCommand) { commands.add(cmd) }
+    override fun onViewCommand(video: String, projection: String, stereo: String, rotation: Double) {
+        views.add(listOf(video, projection, stereo, rotation))
+    }
     override fun setVolume(volume: Double) { volumes.add(volume) }
     override fun recenter() { recenters++ }
     override fun showMessage(text: String?, seconds: Double) { messages.add(text to seconds) }
@@ -91,6 +95,19 @@ class PlayerControllerTest {
         feed("""{"type":"pause","video":"a.mp4","pos":7,"at":1001}""")
         assertEquals(2, host.commands.size)
         assertEquals(7.0, ctl.engine.pauseRequest!!.pos)
+    }
+
+    @Test fun viewForLoadedVideoReachesHost() {
+        feed("""{"type":"play","video":"a.mp4","pos":5,"at":1001}""")
+        feed("""{"type":"view","video":"a.mp4","projection":"flat","stereo":"sbs","rotation":10}""")
+        assertEquals(listOf<Any>("a.mp4", "flat", "sbs", 10.0), host.views.single())
+    }
+
+    @Test fun viewForOtherOrUnloadedVideoIsIgnored() {
+        feed("""{"type":"view","video":"a.mp4","projection":"flat","stereo":"sbs"}""")
+        feed("""{"type":"play","video":"a.mp4","pos":5,"at":1001}""")
+        feed("""{"type":"view","video":"b.mp4","projection":"flat","stereo":"sbs"}""")
+        assertTrue(host.views.isEmpty())
     }
 
     @Test fun stopUnloads() {

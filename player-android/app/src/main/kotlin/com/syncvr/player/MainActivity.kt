@@ -24,6 +24,7 @@ import com.syncvr.player.core.OverlayInput
 import com.syncvr.player.core.PanelText
 import com.syncvr.player.core.PlayerController
 import com.syncvr.player.core.PlayerHost
+import com.syncvr.player.core.ViewSpec
 import com.syncvr.player.core.PlayerInfo
 import com.syncvr.player.core.TelemetryCache
 import com.syncvr.player.core.net.ConnectionConfig
@@ -35,8 +36,9 @@ import com.syncvr.player.core.sync.VideoCommand
  * VrApi host activity: forwards lifecycle and surface events to native code, finds the server
  * (UDP beacon, multicast lock held by [MulticastLockGuard]) and runs the [PlayerController]
  * message loop. Threads: ServerConnection's own threads fill its inbox; everything else, including
- * every ExoPlayer call, runs on the main thread from [loopTick]. The display mode still cycles
- * every 15 s for the hardware check.
+ * every ExoPlayer call, runs on the main thread from [loopTick]. The display mode follows each
+ * play command's projection/stereo and `view` messages; it only auto-cycles (every 15 s, hardware
+ * check) when launched with `--ez cycle_modes true`.
  */
 class MainActivity : Activity(), SurfaceHolder.Callback, PlayerHost {
     private val main = Handler(Looper.getMainLooper())
@@ -60,10 +62,12 @@ class MainActivity : Activity(), SurfaceHolder.Callback, PlayerHost {
     private var panelSurface: Surface? = null
     private var sphereSurface: Surface? = null
     private var mode = DisplayMode.EQUIRECT_MONO
+    private var view = ViewSpec.DEFAULT
+    private var cycleModes = false
 
     private val modeTick = object : Runnable {
         override fun run() {
-            applyMode(cycle.next(mode))
+            applyMode(cycle.next(mode), ViewSpec.DEFAULT)
             main.postDelayed(this, cycle.intervalMs)
         }
     }
@@ -87,6 +91,8 @@ class MainActivity : Activity(), SurfaceHolder.Callback, PlayerHost {
         Log.i(TAG, "SyncVR player ${BuildConfig.VERSION_NAME} (${PlayerInfo.PLAYER}), videos: ${PlayerInfo.VIDEO_DIR}")
         Diagnostics.logAll()
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+        // Debug: `--ez cycle_modes true` cycles through the display modes every 15 s.
+        cycleModes = intent?.getBooleanExtra("cycle_modes", false) == true
 
         val surfaceView = SurfaceView(this)
         surfaceView.holder.addCallback(this)
@@ -107,7 +113,7 @@ class MainActivity : Activity(), SurfaceHolder.Callback, PlayerHost {
         main.removeCallbacks(modeTick)
         main.removeCallbacks(panelTick)
         main.removeCallbacks(loopTick)
-        main.postDelayed(modeTick, cycle.intervalMs)
+        if (cycleModes) main.postDelayed(modeTick, cycle.intervalMs)
         loopTick.run()
         panelTick.run()
     }
@@ -179,7 +185,7 @@ class MainActivity : Activity(), SurfaceHolder.Callback, PlayerHost {
             panelSurface = panelSurf
             sphereSurface = sphere
             panel.setSurface(panelSurf)
-            applyMode(mode)
+            applyMode(mode, view)
         }
     }
 
@@ -204,7 +210,7 @@ class MainActivity : Activity(), SurfaceHolder.Callback, PlayerHost {
                 redrawPanel()
             },
         )
-        applyMode(mode)
+        applyMode(mode, view)
     }
 
     private fun startNetworking() {
@@ -285,6 +291,19 @@ class MainActivity : Activity(), SurfaceHolder.Callback, PlayerHost {
 
     override fun onVideoCommand(cmd: VideoCommand) {
         Log.i(TAG, "Video command ${cmd.video} ${cmd.projection}/${cmd.stereo}")
+        applyView(ViewSpec.from(cmd.projection, cmd.stereo))
+    }
+
+    override fun onViewCommand(video: String, projection: String, stereo: String, rotation: Double) {
+        Log.i(TAG, "View command $video $projection/$stereo")
+        applyView(ViewSpec.from(projection, stereo))
+    }
+
+    /** Applies a video's view unless the debug mode cycle is running. */
+    private fun applyView(spec: ViewSpec) {
+        if (cycleModes) return
+        if (spec == view && spec.displayMode == mode) return
+        applyMode(spec.displayMode, spec)
     }
 
     override fun setVolume(volume: Double) {
@@ -319,10 +338,11 @@ class MainActivity : Activity(), SurfaceHolder.Callback, PlayerHost {
         }
     }
 
-    private fun applyMode(newMode: DisplayMode) {
+    private fun applyMode(newMode: DisplayMode, newView: ViewSpec) {
         mode = newMode
-        Log.i(TAG, "Mode -> ${mode.label()}")
-        if (handle != 0L) NativeBridge.nativeSetMode(handle, mode.ordinal)
+        view = newView
+        Log.i(TAG, "Mode -> ${mode.label()} view ${view.label()}")
+        if (handle != 0L) NativeBridge.nativeSetMode(handle, mode.ordinal, view.stereo.code, view.half)
         val target = if (mode.usesCompositorSurface) videoSurface else sphereSurface
         player?.setSurface(target)
         redrawPanel()
@@ -349,7 +369,7 @@ class MainActivity : Activity(), SurfaceHolder.Callback, PlayerHost {
                 state = c?.engine?.reportedState ?: "idle",
                 playerError = exo?.error,
                 receivingContent = contentHost?.manager?.progressJson() != null,
-                modeLabel = mode.label(),
+                modeLabel = if (cycleModes) mode.label() else view.label(),
                 videoLine = videoLine,
                 nativeStatus = if (handle != 0L) NativeBridge.nativeGetStatus(handle) else "native not running",
             ),

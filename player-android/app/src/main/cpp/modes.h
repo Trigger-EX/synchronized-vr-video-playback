@@ -11,6 +11,14 @@ enum Mode : int {
     kModeCount = 4,
 };
 
+// Frame packing of the video texture. Must match com.syncvr.player.core.ViewStereo.code.
+enum Stereo : int {
+    kStereoMono = 0,
+    kStereoTopBottom = 1,
+    kStereoSideBySide = 2,
+    kStereoCount = 3,
+};
+
 inline const char* ModeName(int mode) {
     switch (mode) {
         case kModeEquirectMono: return "EQUIRECT_MONO";

@@ -149,11 +149,14 @@ void App::OnSurfaceDestroyed() {
     if (old != nullptr) ANativeWindow_release(old);
 }
 
-void App::SetMode(int mode) {
+void App::SetMode(int mode, int stereo, bool half180) {
     if (mode < 0 || mode >= kModeCount) {
         LOGW("Ignoring invalid mode %d", mode);
         return;
     }
+    if (stereo < 0 || stereo >= kStereoCount) stereo = kStereoMono;
+    stereo_.store(stereo);
+    half180_.store(half180);
     mode_.store(mode);
 }
 
@@ -534,9 +537,14 @@ void App::RunFrame(JNIEnv* env) {
 
     const int mode = mode_.load();
     if (mode != lastMode_) {
-        LOGI("Render thread mode -> %d %s", mode, ModeName(mode));
+        LOGI("Render thread mode -> %d %s stereo %d half180 %d", mode, ModeName(mode), stereo_.load(),
+             half180_.load() ? 1 : 0);
         lastMode_ = mode;
     }
+
+    // The cycle's top/bottom mode forces top/bottom; otherwise the view's packing applies.
+    const int stereo = (mode == kModeEquirectStereoTb) ? kStereoTopBottom : stereo_.load();
+    const bool half180 = half180_.load();
 
     ovrLayerProjection2 projectionLayer;
     ovrLayerEquirect2 equirectLayer;
@@ -564,17 +572,20 @@ void App::RunFrame(JNIEnv* env) {
             break;
         }
         case kModeCylinderFlat:
+        {
+            // The decoded frame holds both eyes: one eye sees half the width (sbs) or height (tb).
+            float aspect = videoAspect_.load();
+            if (stereo == kStereoSideBySide) aspect *= 0.5f;
+            else if (stereo == kStereoTopBottom) aspect *= 2.0f;
             videoLayer = MakeCylinderLayer(
-                tracking, videoChain_, VideoScreenPlacement(videoAspect_.load()), false);
+                tracking, videoChain_, VideoScreenPlacement(aspect), false, false, stereo);
             layers[layerCount++] = &videoLayer.Header;
             break;
+        }
         case kModeEquirectStereoTb:
-            equirectLayer = MakeEquirectLayer(rawTracking, videoChain_, true, yaw_);
-            layers[layerCount++] = &equirectLayer.Header;
-            break;
         case kModeEquirectMono:
         default:
-            equirectLayer = MakeEquirectLayer(rawTracking, videoChain_, false, yaw_);
+            equirectLayer = MakeEquirectLayer(rawTracking, videoChain_, stereo, half180, yaw_);
             layers[layerCount++] = &equirectLayer.Header;
             break;
     }
