@@ -13,6 +13,8 @@ import android.view.SurfaceHolder
 import android.view.SurfaceView
 import android.view.WindowManager
 import android.provider.Settings
+import com.syncvr.player.core.AppLifecycle
+import com.syncvr.player.core.CalibrationPersistence
 import com.syncvr.player.core.DisplayMode
 import com.syncvr.player.core.ModeCycle
 import com.syncvr.player.core.FrameRate
@@ -51,6 +53,8 @@ class MainActivity : Activity(), SurfaceHolder.Callback, PlayerHost {
     private var sampler: TelemetrySampler? = null
     private var wifiLock: WifiPerformanceLock? = null
     private var resumed = false
+    private var calibration: CalibrationPersistence? = null
+    private var appLifecycle: AppLifecycle? = null
 
     private var videoSurface: Surface? = null
     private var panelSurface: Surface? = null
@@ -73,6 +77,7 @@ class MainActivity : Activity(), SurfaceHolder.Callback, PlayerHost {
     private val loopTick = object : Runnable {
         override fun run() {
             controller?.tick()
+            calibration?.tick()
             main.postDelayed(this, LOOP_INTERVAL_MS)
         }
     }
@@ -98,10 +103,7 @@ class MainActivity : Activity(), SurfaceHolder.Callback, PlayerHost {
         super.onResume()
         resumed = true
         sampler?.start()
-        if (handle != 0L) NativeBridge.nativeResume(handle)
-        // The monotonic clock stops while the headset sleeps: re-measure it, then re-cue.
-        connection?.resyncClock()
-        controller?.resync()
+        appLifecycle?.onResume() ?: run { if (handle != 0L) NativeBridge.nativeResume(handle) }
         main.removeCallbacks(modeTick)
         main.removeCallbacks(panelTick)
         main.removeCallbacks(loopTick)
@@ -116,9 +118,12 @@ class MainActivity : Activity(), SurfaceHolder.Callback, PlayerHost {
         main.removeCallbacks(modeTick)
         main.removeCallbacks(panelTick)
         main.removeCallbacks(loopTick)
-        player?.pause()
-        // Blocks (bounded) until the render thread has left VR mode.
-        if (handle != 0L) NativeBridge.nativePause(handle)
+        // Saves calibration, pauses the player, then blocks (bounded) until the render thread has
+        // left VR mode.
+        appLifecycle?.onPause() ?: run {
+            player?.pause()
+            if (handle != 0L) NativeBridge.nativePause(handle)
+        }
         super.onPause()
     }
 
@@ -128,6 +133,9 @@ class MainActivity : Activity(), SurfaceHolder.Callback, PlayerHost {
         connection = null
         wifiLock?.release()
         wifiLock = null
+        calibration?.save()
+        appLifecycle = null
+        calibration = null
         controller = null
         player?.release()
         player = null
@@ -230,6 +238,18 @@ class MainActivity : Activity(), SurfaceHolder.Callback, PlayerHost {
             telemetry = telemetry::get,
             // The render thread publishes "VR on, 72.0 fps" as its status text.
             fps = { if (handle != 0L) FrameRate.parse(NativeBridge.nativeGetStatus(handle)) else null },
+        )
+        val ctl = controller!!
+        val cal = CalibrationPersistence(ctl.engine, PrefsCalibrationStore(this), { LocalClock.now })
+        cal.load()
+        calibration = cal
+        appLifecycle = AppLifecycle(
+            calibration = cal,
+            leaveVr = { if (handle != 0L) NativeBridge.nativePause(handle) },
+            enterVr = { if (handle != 0L) NativeBridge.nativeResume(handle) },
+            pausePlayer = { exo.pause() },
+            resyncClock = { conn.resyncClock() },
+            resyncPlayback = { ctl.resync() },
         )
         wifiLock = WifiPerformanceLock(this).also { it.acquire() }
         conn.start()
