@@ -9,6 +9,7 @@ from PySide6.QtWidgets import QLabel, QMainWindow, QTabWidget, QVBoxLayout, QWid
 
 from ..launcher import open_path
 from . import format as fmt
+from .headsets import HeadsetsTab
 from .playback import PlaybackPanel
 
 TABS = ("Headsets", "Library", "Settings", "Log")
@@ -37,8 +38,10 @@ class MainWindow(QMainWindow):
         self.resize(1100, 760)
 
         self.tabs = QTabWidget()
+        self.headsets = HeadsetsTab(self)
+        self.tab_widgets = {"Headsets": self.headsets}
         for name in TABS:
-            self.tabs.addTab(_placeholder(name), name)
+            self.tabs.addTab(self.tab_widgets.get(name) or _placeholder(name), name)
         self.playback = PlaybackPanel(self)
         central = QWidget()
         lay = QVBoxLayout(central)
@@ -81,6 +84,7 @@ class MainWindow(QMainWindow):
 
     def set_targets(self, ids) -> None:
         self.targets = list(ids)
+        self.headsets.update_selection()
         self.playback.update_state()
 
     def on_state(self, snap) -> None:
@@ -89,6 +93,8 @@ class MainWindow(QMainWindow):
         known = {d["id"] for d in snap.get("devices") or []}
         self.targets = [i for i in self.targets if i in known]
         self.update_status(snap)
+        for widget in self.tab_widgets.values():
+            widget.update_state()
         self.playback.update_state()
 
     def update_status(self, snap) -> None:
