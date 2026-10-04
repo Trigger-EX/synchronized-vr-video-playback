@@ -115,3 +115,68 @@ jobs:
           git -c user.name="github-actions[bot]" -c user.email="41898282+github-actions[bot]@users.noreply.github.com" \
             commit -q -m "SyncVRPlayer.apk and SyncVROperator.apk from ${GITHUB_REF_NAME}@${GITHUB_SHA::7}"
           git push -q -f "$remote" "HEAD:refs/heads/apk/${GITHUB_REF_NAME}"
+
+  # Self-contained desktop app (PyInstaller onedir), built natively on each OS and published as an
+  # asset of the rolling prerelease desktop-<branch> (fetched with tools/get-desktop.sh|.ps1).
+  desktop:
+    if: github.event_name == 'push' && github.ref_type == 'branch'
+    needs: server
+    permissions:
+      contents: write # creates/updates the desktop-<branch> release
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-22.04
+            asset: SyncVR-linux-x86_64.tar.gz
+          - os: windows-latest
+            asset: SyncVR-windows-x86_64.zip
+          - os: macos-14
+            asset: SyncVR-macos-arm64.zip
+    runs-on: ${{ matrix.os }}
+    env:
+      QT_QPA_PLATFORM: offscreen
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Qt runtime libraries (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libxcb-cursor0 libxcb-icccm4 libxcb-image0 libxcb-keysyms1 \
+            libxcb-render-util0 libxcb-xinerama0 libxkbcommon-x11-0 libegl1
+      - run: pip install "./server[gui]" pyinstaller
+      - run: pyinstaller --noconfirm packaging/syncvr.spec
+      - name: Smoke test the built app
+        shell: bash
+        run: |
+          if [ "$RUNNER_OS" = macOS ]; then exe=dist/SyncVR.app/Contents/MacOS/SyncVR
+          elif [ "$RUNNER_OS" = Windows ]; then exe=dist/SyncVR/SyncVR.exe
+          else exe=dist/SyncVR/SyncVR; fi
+          "$exe" --self-test
+      - name: Archive
+        shell: bash
+        run: |
+          if [ "$RUNNER_OS" = Linux ]; then
+            tar -czf "${{ matrix.asset }}" -C dist SyncVR
+          elif [ "$RUNNER_OS" = Windows ]; then
+            powershell -NoProfile -Command "Compress-Archive -Path dist/SyncVR -DestinationPath '${{ matrix.asset }}'"
+          else
+            codesign --force --deep -s - dist/SyncVR.app
+            ditto -c -k --keepParent dist/SyncVR.app "${{ matrix.asset }}"
+          fi
+          ls -l "${{ matrix.asset }}"
+      - name: Publish to release desktop-<branch>
+        shell: bash
+        run: |
+          tag="desktop-${GITHUB_REF_NAME//\//-}"
+          if ! gh release view "$tag" >/dev/null 2>&1; then
+            gh release create "$tag" --prerelease --target "$GITHUB_SHA" --title "Desktop app ($GITHUB_REF_NAME)" \
+              --notes "Rolling desktop builds of ${GITHUB_REF_NAME}. Fetch with tools/get-desktop.sh or tools/get-desktop.ps1." \
+              || gh release view "$tag" >/dev/null  # another matrix job may have created it first
+          fi
+          gh release upload "$tag" "${{ matrix.asset }}" --clobber
+          gh release edit "$tag" --notes "Rolling desktop builds of ${GITHUB_REF_NAME}; latest commit ${GITHUB_SHA::7}."
