@@ -86,6 +86,26 @@ Once connected, the player shows its name and connection state on a dark screen 
 dashboard shows `native` as the player type. Headsets use their Android serial number as their ID,
 the same serial `adb devices` shows, so it's easy to match a physical headset to its dashboard card.
 
+## Kiosk mode
+
+`python3 -m syncvr adb kiosk on` disables the Oculus home (`com.oculus.vrshell`) and makes the
+player the home app, so the headset boots into it and the Oculus button returns to it. It
+needs an APK that declares the HOME intent filter (current builds do).
+
+```bash
+python3 -m syncvr adb kiosk on           # disable vrshell, set the player as home
+python3 -m syncvr adb kiosk on --root    # the adb root recipe; needs USB, not Wi-Fi ADB
+python3 -m syncvr adb kiosk off          # re-enable vrshell and restore its home activity
+```
+
+* **Recovery.** If a headset is stuck in the player, run `kiosk off` over ADB. Set up Wi-Fi on the
+  headset *before* `kiosk on`, since the Oculus UI is how you do that. Use USB for `--root`
+  (`adb root` restarts adbd, which drops Wi-Fi ADB).
+* **Server address.** Kiosk headsets rely on `config.json` or UDP discovery for the server, not
+  `--usb` (the `adb reverse` is lost on reboot).
+* **Unverified.** vrshell's HOME activity name on stock firmware is looked up by `kiosk off`
+  (`cmd package resolve-activity`); not yet tried on hardware.
+
 ## Checkpoint 1 (hardware check)
 
 The player still cycles through four ways of showing a video (it keeps doing so while connected). The goal is to

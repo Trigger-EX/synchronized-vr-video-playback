@@ -102,6 +102,7 @@ class Distributor:
 
     def request(self, device_id: str, names: List[str], delete_others: bool) -> None:
         self.queue[device_id] = {"files": list(names), "delete_others": delete_others}
+        self.controller.dirty = True
         self.pump()
 
     def pump(self) -> None:
@@ -140,6 +141,7 @@ class Distributor:
         return entry
 
     def finished(self, device_id: str, msg: dict) -> None:
+        self.controller.dirty = True
         if self.active.pop(device_id, None) is not None:
             dev = self.controller.devices.get(device_id)
             failed = msg.get("failed") or []
@@ -155,6 +157,7 @@ class Distributor:
             self.finished(device_id, {})
 
     def disconnected(self, device_id: str) -> None:
+        self.controller.dirty = True
         job = self.active.pop(device_id, None)
         if job is not None:
             # Retry first when the headset comes back.
@@ -163,6 +166,7 @@ class Distributor:
         self.pump()
 
     def cancel(self, device_ids: Iterable[str]) -> None:
+        self.controller.dirty = True
         for device_id in device_ids:
             self.queue.pop(device_id, None)
             if self.active.pop(device_id, None) is not None:
@@ -170,6 +174,13 @@ class Distributor:
                 if dev and dev.online:
                     self.controller.send(dev, {"type": "cancel_downloads"})
         self.pump()
+
+    def pending_json(self) -> dict:
+        """Jobs to resume after a server restart (active ones first), without progress."""
+        jobs = dict(self.active)
+        for device_id, job in self.queue.items():
+            jobs.setdefault(device_id, job)
+        return {i: {"files": job["files"], "delete_others": job["delete_others"]} for i, job in jobs.items()}
 
     def to_json(self) -> dict:
         return {
@@ -205,6 +216,10 @@ class Controller:
         self.library.metadata.update(data.get("videos", {}))
         if "max_downloads" in data:
             self.distributor.max_concurrent = max(0, int(data["max_downloads"]))
+        for device_id, job in data.get("downloads", {}).items():
+            if device_id in self.devices:
+                self.distributor.queue[device_id] = {"files": [str(n) for n in job.get("files", [])],
+                                                     "delete_others": bool(job.get("delete_others", False))}
 
     def dump(self) -> dict:
         return {
@@ -212,6 +227,7 @@ class Controller:
             "max_downloads": self.distributor.max_concurrent,
             "devices": {d.device_id: d.saved() for d in self.devices.values()},
             "videos": self.library.metadata,
+            "downloads": self.distributor.pending_json(),
         }
 
     def add_listener(self, fn: Callable[[], None]) -> None:
