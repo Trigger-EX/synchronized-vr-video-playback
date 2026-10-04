@@ -62,5 +62,7 @@ kotlin {
 
 dependencies {
     implementation(project(":core"))
+    // media3-common (Player, MediaItem, PlaybackParameters, AudioAttributes) comes in as an api dependency.
     implementation("androidx.media3:media3-exoplayer:1.4.1")
+    implementation("androidx.media3:media3-common:1.4.1")
 }

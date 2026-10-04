@@ -36,6 +36,7 @@ class Device:
     group: str = ""
     model: str = ""
     app_version: str = ""
+    player: str = ""  # which app the headset runs: "native", "unity", ... ("" = unknown)
     serial: str = ""
     ip: str = ""
     volume: float = 1.0
@@ -63,6 +64,7 @@ class Device:
             "group": self.group,
             "model": self.model,
             "app_version": self.app_version,
+            "player": self.player,
             "serial": self.serial,
             "ip": self.ip,
             "volume": self.volume,
@@ -259,6 +261,8 @@ class Controller:
         dev.ip = conn.remote_ip
         dev.model = str(hello.get("model", dev.model))
         dev.app_version = str(hello.get("app_version", ""))
+        # The Unity app predates this field and never sends it.
+        dev.player = str(hello.get("player") or "unity")
         dev.serial = str(hello.get("serial", dev.serial))
         dev.connected_at = dev.last_seen = time.time()
         dev.status = {}

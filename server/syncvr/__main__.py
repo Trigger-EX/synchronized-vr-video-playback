@@ -7,7 +7,6 @@ import sys
 from pathlib import Path
 
 from . import __version__, adbtool, sim
-from .app import ServerConfig, serve_forever
 from .protocol import DEFAULT_DISCOVERY_PORT, DEFAULT_HTTP_PORT, DEFAULT_TCP_PORT
 
 
@@ -46,6 +45,7 @@ def main(argv=None) -> int:
                         format="%(asctime)s %(levelname)-7s %(message)s", datefmt="%H:%M:%S")
     try:
         if args.command == "serve":
+            from .app import ServerConfig, serve_forever  # lazy: needs aiohttp, which adb/sim do not
             config = ServerConfig(
                 content_dir=Path(args.content), data_dir=Path(args.data), host=args.host,
                 http_port=args.http_port, tcp_port=args.tcp_port, discovery_port=args.discovery_port,

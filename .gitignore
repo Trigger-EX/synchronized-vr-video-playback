@@ -34,3 +34,6 @@ Thumbs.db
 # Claude Code agent logs
 build.log
 test.log
+
+# APK fetched by player-android/tools/get-apk.sh
+/SyncVRPlayer.apk

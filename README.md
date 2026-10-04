@@ -21,7 +21,7 @@ account and no internet connection.
 | Part | Where | What it is |
 |---|---|---|
 | **Server + dashboard** | [`server/`](server/) | Python 3.8+ (one dependency: aiohttp). Runs on any laptop, mini-PC or Raspberry Pi on the headsets' network. Replaces Headjack Operator. |
-| **Headset app** | [`headset/`](headset/) | Unity 2019.4 LTS project for Oculus Go (also the basis for Quest). Replaces Headjack Link / the Cinema template. |
+| **Headset app** | [`player-android/`](player-android/) | Native Oculus Go player (Kotlin + C++, built and signed by CI, no Unity). Replaces Headjack Link / the Cinema template. The old Unity project in [`headset/`](headset/) is legacy. |
 | **Fleet tool** | `python -m syncvr adb …` | Installs the app, writes config and copies videos to many USB-connected headsets in parallel. |
 | **Simulator** | `python -m syncvr sim` | Simulated headsets that run the real sync code, for trying the dashboard and load-testing without hardware. |
 
@@ -65,22 +65,24 @@ No headsets yet? Start 20 simulated ones in another terminal and use the dashboa
 python3 -m syncvr sim --count 20
 ```
 
-### 2. Build and install the headset app
+### 2. Install the headset app
 
-See **[docs/HEADSET_SETUP.md](docs/HEADSET_SETUP.md)**. The native player's APK is built by
-GitHub Actions (download the **SyncVRPlayer-apk** artifact). With headsets on USB:
+See **[docs/HEADSET_SETUP.md](docs/HEADSET_SETUP.md)**; nothing is built locally. CI publishes the
+APK as the **SyncVRPlayer-apk** artifact and on the git branch `apk/<branch>` (`git apk`). With
+headsets on USB:
 
 ```bash
-python3 -m syncvr adb setup SyncVRPlayer.apk   # install, configure, launch
-python3 -m syncvr adb push content/*.mp4       # optional: fast USB preload
+cd server
+python3 -m syncvr adb setup ../SyncVRPlayer.apk   # install, configure, launch
+python3 -m syncvr adb push ../content/*.mp4       # optional: fast USB preload
 ```
 
-The native player is still a diagnostic build that doesn't join the server yet. Until it does,
-shows run on the Unity app: see [docs/UNITY_PLAYER.md](docs/UNITY_PLAYER.md).
+The native player is untested on hardware so far. The legacy Unity app is described in
+[docs/UNITY_PLAYER.md](docs/UNITY_PLAYER.md).
 
 ### 3. Run a show
 
-1. Power on the headsets and start **SyncVR Player** (Library › Unknown Sources on the Go).
+1. Power on the headsets and start **SyncVR Player** (Library › Unknown Sources on the Go; `adb launch` also works).
    They find the server by themselves and appear in the dashboard.
 2. *Headsets* tab: name them and set groups (Edit on each card).
 3. Pick a video, **Push video** if it isn't on the headsets yet (the card shows `3/3 videos`).
@@ -94,8 +96,8 @@ shows run on the Unity app: see [docs/UNITY_PLAYER.md](docs/UNITY_PLAYER.md).
   (headsets must be able to hear the server's UDP broadcast). Prefer 5 GHz.
 * Consumer routers handle ~25–30 headsets well; beyond ~60, use enterprise access points.
   Put the server machine on Ethernet.
-* If broadcast discovery is blocked, give headsets a fixed server address:
-  `python3 -m syncvr adb configure --server 192.168.1.10`.
+* If broadcast discovery is blocked, use `serve --broadcast 192.168.1.255`. A fixed server address
+  (`syncvr adb configure --server …`) is only read by the legacy Unity app, not the native player.
 * **Encoding for Oculus Go:** H.264 High profile MP4, up to 3840×1920 (360 mono) or
   3840×2160 (stereo) at 30 fps, 20–40 Mbps, AAC audio. A keyframe every 1 s
   (`-g 30` at 30 fps) makes seeks and re-syncs faster. Example:
@@ -125,8 +127,8 @@ worst headset under 20 ms once playing.
 |---|---|
 | Server, dashboard, protocol, content distribution, ADB tool | Working; 42 automated tests (`cd server && python3 -m pytest`), including end-to-end runs with simulated headsets. |
 | Sync engine | Python reference and C# port pass the same scenario tests (`headset/Tests~/EngineTests.cs`, runs under Mono). |
-| Headset app (native) | Diagnostic build in `player-android/`, built and signed by CI. Waiting on the first hardware check ([Checkpoint 1](docs/HEADSET_SETUP.md#checkpoint-1-hardware-check)); server connection and sync come next. |
-| Headset app (Unity, fallback) | Compiles against the Unity 2019.4 engine and editor APIs, but has **not yet been built into an APK or run on an Oculus Go**. The main unknowns are listed in [docs/UNITY_PLAYER.md](docs/UNITY_PLAYER.md#first-test-on-hardware). |
+| Headset app (native) | `player-android/`, built and signed by CI: server connection, sync, content, telemetry, operator commands and an end-to-end CI test against the Python server. Not yet run on hardware ([Checkpoint 1](docs/HEADSET_SETUP.md#checkpoint-1-hardware-check)). |
+| Headset app (Unity, legacy) | Never built or run on an Oculus Go; kept as a fallback until phase 5 of [docs/EXECUTION_PLAN.md](docs/EXECUTION_PLAN.md). See [docs/UNITY_PLAYER.md](docs/UNITY_PLAYER.md). |
 
 ## Roadmap
 
@@ -144,9 +146,10 @@ server/                 Python package "syncvr"
   syncvr/sync_engine.py reference headset sync algorithm (ported to C#)
   syncvr/web/           dashboard (plain HTML/CSS/JS, no build step)
   tests/                pytest suite
-headset/                Unity 2019.4 project (Oculus Go)
+player-android/         native Oculus Go player (Kotlin core + Android/C++ app)
+headset/                legacy Unity 2019.4 project
   Assets/SyncVR/Scripts runtime: networking, sync engine, player, UI
   Assets/SyncVR/Editor  one-click configure + build
   Tests~/               sync engine tests runnable with Mono
-docs/                   protocol, headset setup guide, improvement and execution plans
+docs/                   protocol, headset setup guide (native player), improvement and execution plans
 ```
