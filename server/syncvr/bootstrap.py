@@ -92,6 +92,8 @@ def main(argv: Optional[List[str]] = None) -> int:
         py = ensure_venv()
     if py is None:
         py = Path(sys.executable)
+        print("SyncVR: using %s without the private environment; the control window needs PySide6, "
+              "so you will probably get the browser dashboard only." % py)
     return subprocess.call([str(py), "-m", "syncvr"] + argv, cwd=str(SERVER_DIR))
 
 

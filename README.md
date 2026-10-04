@@ -91,7 +91,7 @@ The native player has run on hardware (see the status table below).
 
 ## Launcher (PC control window)
 
-Double-click instead of using a terminal: `Start SyncVR.desktop` (Linux; on Linux Mint's Nemo choose
+Double-click instead of using a terminal: `Start SyncVR.desktop` (Linux; on Linux Mint's Nemo, right-click > Properties > Permissions > "Allow executing file as program", then choose
 "Trust and launch" the first time, or run `./start-syncvr.sh`) `Start SyncVR.pyw` (Windows; WSL users
 should start it from Windows, not from inside WSL) or `Start SyncVR.command` (macOS; right-click > Open the
 first time). The first run creates `server/.venv` and downloads aiohttp and PySide6 (~100 MB; needs internet,

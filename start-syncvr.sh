@@ -15,4 +15,11 @@ if [ ! -t 1 ] && [ -z "$SYNCVR_IN_TERM" ] && [ ! -f .venv/.syncvr-deps ] && [ -z
         exec gnome-terminal -- "$self" "$@"
     fi
 fi
-exec python3 -m syncvr.bootstrap gui "$@"
+python3 -m syncvr.bootstrap gui "$@"
+rc=$?
+# Started in a terminal we opened ourselves: keep it open on failure so the message can be read.
+if [ -n "$SYNCVR_IN_TERM" ] && [ "$rc" -ne 0 ]; then
+    printf 'SyncVR exited with an error (%s). Press Enter to close. ' "$rc"
+    read -r _
+fi
+exit "$rc"

@@ -258,16 +258,27 @@ def _offer_install(message: str) -> bool:
 _QT_PROBE = "from PySide6.QtWidgets import QApplication; QApplication([])"
 
 
+def _qt_note(reason: str) -> None:
+    """Say why the window is not available; shown before the console fallback starts."""
+    msg = "SyncVR: no control window, falling back to console mode: " + reason
+    log.warning(msg)
+    if sys.stderr is not None:
+        print(msg, file=sys.stderr)
+
+
 def qt_available(console: bool = False) -> bool:
     """True when PySide6 imports and a Qt window can actually be created."""
     if console:
         return False
     try:
         __import__("PySide6")  # import, not find_spec: a broken install must count as missing
-    except ImportError:
+    except ImportError as exc:
+        _qt_note("PySide6 is not installed in %s (%s). Delete server/.venv and start again to reinstall."
+                 % (sys.executable, exc))
         return False
     if sys.platform.startswith("linux") and not (os.environ.get("DISPLAY") or os.environ.get("WAYLAND_DISPLAY")):
         if os.environ.get("QT_QPA_PLATFORM", "") not in ("offscreen", "minimal"):
+            _qt_note("no display found (DISPLAY/WAYLAND_DISPLAY unset)")
             return False
     # A missing platform plugin (xcb) aborts the whole process, so probe in a child process.
     kwargs = {}
@@ -275,11 +286,13 @@ def qt_available(console: bool = False) -> bool:
         kwargs["creationflags"] = getattr(subprocess, "CREATE_NO_WINDOW", 0)
     try:
         res = subprocess.run([sys.executable, "-c", _QT_PROBE], stdout=subprocess.DEVNULL,
-                             stderr=subprocess.DEVNULL, timeout=15, **kwargs)
-    except (OSError, subprocess.SubprocessError):
+                             stderr=subprocess.PIPE, timeout=15, **kwargs)
+    except (OSError, subprocess.SubprocessError) as exc:
+        _qt_note("the Qt probe failed to run (%s)" % exc)
         return False
     if res.returncode != 0:
-        log.warning("Qt could not start (on Linux try: sudo apt install libxcb-cursor0)")
+        detail = (res.stderr or b"").decode("utf-8", "replace").strip()[-600:]
+        _qt_note("Qt could not start. On Linux try: sudo apt install libxcb-cursor0 libxcb-xinerama0\n%s" % detail)
         return False
     return True
 
@@ -307,6 +320,9 @@ def main(args) -> int:
 
     if config.http_port and port_in_use(config.http_port):
         log.info("port %d already in use; opening the running dashboard instead", config.http_port)
+        print("SyncVR is already running on port %d (an earlier server or window?). Opening its dashboard "
+              "instead of starting a new window. Stop the old one (close its window, or: pkill -f syncvr) "
+              "and start again." % config.http_port)
         open_path(local_url)
         return 0
 
