@@ -24,5 +24,6 @@ Thumbs.db
 build.log
 test.log
 
-# APK fetched by player-android/tools/get-apk.sh
+# APKs fetched by player-android/tools/get-apk.sh
 /SyncVRPlayer.apk
+/SyncVROperator.apk

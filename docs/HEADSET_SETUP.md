@@ -37,14 +37,41 @@ git apk              # writes ./SyncVRPlayer.apk (repo root) and prints which co
 git apk --install    # same, then adb install -r onto the connected headset
 git apk --launch     # install, then (re)start the app on the headset
 git apk main         # the APK of another branch
+git apk --operator   # ./SyncVROperator.apk, the operator app for a phone or tablet (see below)
 ```
 
 If the branch has commits newer than the published APK, `git apk` says so (CI still running or
 failed). Without git: on GitHub → **Actions** → the latest green **CI** run on the branch →
-**Artifacts** → **SyncVRPlayer-apk** (a zip containing `SyncVRPlayer.apk`).
+**Artifacts** → **SyncVRPlayer-apk** (a zip containing `SyncVRPlayer.apk`) or
+**SyncVROperator-apk** (`SyncVROperator.apk`).
 
 Every build is signed with the same key (stored in the repository secrets), so a newer APK
 installs over an older one without losing videos.
+
+## Operator app (phone or tablet)
+
+`SyncVROperator.apk` (package `com.syncvr.operator`, Android 7.0+) is a native remote control for
+the same dashboard: no browser needed. It is signed with the same key as the player and is
+installed on the operator's phone, not on a headset.
+
+```sh
+git apk --operator --install   # phone connected over USB with debugging on; or copy the file over and open it
+```
+
+1. Put the phone on the same Wi-Fi as the server and open **SyncVR Operator**. Servers are found
+   automatically (UDP beacon on port 8766, the same one headsets use); tap one, or type
+   `192.168.1.10` or `192.168.1.10:8080` (port 8080 is the default). Enter the password if the
+   server was started with one.
+2. **Headsets** lists every headset with online state, status, video and position. Tap rows to
+   choose which ones the controls apply to (none chosen means all); long-press to rename, set a
+   group, or forget an offline headset.
+3. Controls at the top: Play, Pause, Stop, a seek bar, -10 s / +10 s, Resync, Identify and
+   Volume. **Library** picks a video to Load or Play and sends files to headsets
+   (**Send to headsets**, **Cancel sends**, **Rescan**). **Events** shows the server log.
+
+The app refreshes once a second while it is in the foreground. If discovery finds nothing (guest
+Wi-Fi, client isolation, a VPN), enter the address by hand. Plain HTTP is used, as in the browser
+dashboard.
 
 ## Preparing headsets
 

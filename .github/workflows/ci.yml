@@ -62,23 +62,30 @@ jobs:
           fi
       - name: Fetch VrApi SDK
         run: ./tools/fetch-vrapi.sh
-      - name: Build signed APK
+      - name: Build signed APKs
         run: |
           export SYNCVR_KEYSTORE_FILE="$RUNNER_TEMP/syncvr.jks"
           printf '%s' "$SYNCVR_KEYSTORE_BASE64" | base64 -d > "$SYNCVR_KEYSTORE_FILE"
-          ./gradlew --no-daemon :app:assembleRelease
+          ./gradlew --no-daemon :app:assembleRelease :operator:assembleRelease
           cp app/build/outputs/apk/release/app-release.apk SyncVRPlayer.apk
+          cp operator/build/outputs/apk/release/operator-release.apk SyncVROperator.apk
           rm -f "$SYNCVR_KEYSTORE_FILE"
-      - name: Verify APK signature
+      - name: Verify APK signatures
         run: |
           apksigner="$ANDROID_HOME/build-tools/$(ls "$ANDROID_HOME/build-tools" | sort -V | tail -1)/apksigner"
           "$apksigner" verify --print-certs SyncVRPlayer.apk
+          "$apksigner" verify --print-certs SyncVROperator.apk
       - uses: actions/upload-artifact@v4
         with:
           name: SyncVRPlayer-apk
           path: player-android/SyncVRPlayer.apk
           if-no-files-found: error
-      # Force-pushes a one-commit branch apk/<branch> holding the APK, so it can be fetched with
+      - uses: actions/upload-artifact@v4
+        with:
+          name: SyncVROperator-apk
+          path: player-android/SyncVROperator.apk
+          if-no-files-found: error
+      # Force-pushes a one-commit branch apk/<branch> holding the APKs, so it can be fetched with
       # git (player-android/tools/get-apk.sh). Skipped if the branch moved on during this run.
       - name: Publish APK to apk/<branch>
         if: github.event_name == 'push' && github.ref_type == 'branch'
@@ -93,7 +100,7 @@ jobs:
           fi
           out="$RUNNER_TEMP/apk-publish"
           mkdir -p "$out"
-          cp SyncVRPlayer.apk "$out/"
+          cp SyncVRPlayer.apk SyncVROperator.apk "$out/"
           cd "$out"
           {
             echo "branch: ${GITHUB_REF_NAME}"
@@ -102,7 +109,7 @@ jobs:
             echo "run: ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
           } > BUILD.txt
           git init -q
-          git add SyncVRPlayer.apk BUILD.txt
+          git add SyncVRPlayer.apk SyncVROperator.apk BUILD.txt
           git -c user.name="github-actions[bot]" -c user.email="41898282+github-actions[bot]@users.noreply.github.com" \
-            commit -q -m "SyncVRPlayer.apk from ${GITHUB_REF_NAME}@${GITHUB_SHA::7}"
+            commit -q -m "SyncVRPlayer.apk and SyncVROperator.apk from ${GITHUB_REF_NAME}@${GITHUB_SHA::7}"
           git push -q -f "$remote" "HEAD:refs/heads/apk/${GITHUB_REF_NAME}"
