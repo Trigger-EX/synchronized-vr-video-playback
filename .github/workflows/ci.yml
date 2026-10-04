@@ -53,7 +53,16 @@ jobs:
           distribution: temurin
           java-version: "17"
       - uses: gradle/actions/setup-gradle@v4
-      - run: ./gradlew --no-daemon :core:test
+      # The end-to-end test (core/.../e2e) starts the Python server, so it needs python + aiohttp.
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: pip install aiohttp
+        working-directory: .
+      - name: Unit and end-to-end tests
+        env:
+          SYNCVR_E2E_REQUIRED: "1" # fail, not skip, if the server cannot start
+        run: ./gradlew --no-daemon :core:test
       - name: Check signing secrets
         run: |
           missing=""
