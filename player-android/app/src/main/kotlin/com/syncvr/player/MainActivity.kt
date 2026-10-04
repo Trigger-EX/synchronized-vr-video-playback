@@ -1,6 +1,7 @@
 package com.syncvr.player
 
 import android.app.Activity
+import android.os.Build
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
@@ -9,27 +10,35 @@ import android.view.Surface
 import android.view.SurfaceHolder
 import android.view.SurfaceView
 import android.view.WindowManager
+import android.provider.Settings
 import com.syncvr.player.core.DisplayMode
 import com.syncvr.player.core.ModeCycle
+import com.syncvr.player.core.Hello
 import com.syncvr.player.core.PanelText
+import com.syncvr.player.core.PlayerController
+import com.syncvr.player.core.PlayerHost
 import com.syncvr.player.core.PlayerInfo
-import com.syncvr.player.core.VideoSelection
+import com.syncvr.player.core.net.ConnectionConfig
+import com.syncvr.player.core.net.ServerConnection
 import com.syncvr.player.core.sync.VideoCommand
-import com.syncvr.player.core.sync.VideoFiles
-import java.io.File
 
 /**
- * VrApi host activity: forwards lifecycle and surface events to native code, plays the first
- * video found with ExoPlayer, and cycles through the display modes every 15 s.
+ * VrApi host activity: forwards lifecycle and surface events to native code, finds the server
+ * (UDP beacon, multicast lock held by [MulticastLockGuard]) and runs the [PlayerController]
+ * message loop. Threads: ServerConnection's own threads fill its inbox; everything else, including
+ * every ExoPlayer call, runs on the main thread from [loopTick]. The display mode still cycles
+ * every 15 s for the hardware check.
  */
-class MainActivity : Activity(), SurfaceHolder.Callback {
+class MainActivity : Activity(), SurfaceHolder.Callback, PlayerHost {
     private val main = Handler(Looper.getMainLooper())
     private val cycle = ModeCycle()
     private val panel = PanelRenderer()
 
     private var handle = 0L
     private var player: ExoVideoPlayer? = null
-    private var videoFile: File? = null
+    private var contentHost: ContentHost? = null
+    private var connection: ServerConnection? = null
+    private var controller: PlayerController? = null
     private var resumed = false
 
     private var videoSurface: Surface? = null
@@ -45,10 +54,15 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
     }
     private val panelTick = object : Runnable {
         override fun run() {
-            // Demo behaviour until the sync engine drives playback: start once the decoder is ready.
-            player?.let { if (resumed && it.isPrepared && !it.isPlaying) it.play() }
             redrawPanel()
             main.postDelayed(this, PANEL_REFRESH_MS)
+        }
+    }
+    /** Drains the server inbox and steps the sync engine; main thread, so ExoPlayer is touched only here. */
+    private val loopTick = object : Runnable {
+        override fun run() {
+            controller?.tick()
+            main.postDelayed(this, LOOP_INTERVAL_MS)
         }
     }
 
@@ -66,16 +80,21 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
         if (handle == 0L) Log.e(TAG, "nativeCreate failed; no VR output")
 
         createPlayer()
+        startNetworking()
     }
 
     override fun onResume() {
         super.onResume()
         resumed = true
         if (handle != 0L) NativeBridge.nativeResume(handle)
-        player?.play()
+        // The monotonic clock stops while the headset sleeps: re-measure it, then re-cue.
+        connection?.resyncClock()
+        controller?.resync()
         main.removeCallbacks(modeTick)
         main.removeCallbacks(panelTick)
+        main.removeCallbacks(loopTick)
         main.postDelayed(modeTick, cycle.intervalMs)
+        loopTick.run()
         panelTick.run()
     }
 
@@ -83,6 +102,7 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
         resumed = false
         main.removeCallbacks(modeTick)
         main.removeCallbacks(panelTick)
+        main.removeCallbacks(loopTick)
         player?.pause()
         // Blocks (bounded) until the render thread has left VR mode.
         if (handle != 0L) NativeBridge.nativePause(handle)
@@ -91,6 +111,9 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
 
     override fun onDestroy() {
         main.removeCallbacksAndMessages(null)
+        connection?.stop()
+        connection = null
+        controller = null
         player?.release()
         player = null
         panel.setSurface(null)
@@ -136,33 +159,79 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
     }
 
     private fun createPlayer() {
-        val dir = File(getExternalFilesDir(null), "videos")
-        if (!dir.exists() && !dir.mkdirs()) Log.w(TAG, "Could not create $dir")
-        val picked = VideoSelection.pick(dir.list()?.toList().orEmpty())
-        if (picked == null) {
-            Log.w(TAG, "No video in $dir")
-            return
-        }
-        val file = File(dir, picked)
-        videoFile = file
-        Log.i(TAG, "Playing ${file.absolutePath}")
-        val exo = ExoVideoPlayer(
+        val host = ContentHost(
             this,
-            resolveFile = { name ->
-                VideoFiles.resolve(name, dir.list()?.toList().orEmpty())?.let { File(dir, it) }
-            },
+            inUse = { player?.loadedVideo },
+            onWarning = { controller?.queueEvent("warn", it) },
+        )
+        contentHost = host
+        val store = host.manager.store
+        player = ExoVideoPlayer(
+            this,
+            resolveFile = { name -> store.pathFor(name) },
             onVideoAspect = { aspect ->
                 Log.i(TAG, "Video aspect=$aspect")
                 if (handle != 0L) NativeBridge.nativeSetVideoAspect(handle, aspect)
             },
             onPlayerEvent = { msg ->
                 Log.e(TAG, msg)
+                controller?.queueEvent("error", msg)
                 redrawPanel()
             },
         )
-        exo.load(VideoCommand(video = picked, loop = true))
-        player = exo
         applyMode(mode)
+    }
+
+    private fun startNetworking() {
+        val exo = player ?: return
+        val host = contentHost ?: return
+        val hello = Hello.build(
+            deviceId = deviceId(),
+            serial = serial(),
+            model = Build.MODEL ?: "",
+            appVersion = BuildConfig.VERSION_NAME,
+        )
+        val conn = ServerConnection(
+            ConnectionConfig(),
+            hello,
+            guard = MulticastLockGuard(this),
+            log = { Log.i(TAG, it) },
+        )
+        connection = conn
+        controller = PlayerController(
+            player = exo,
+            content = host.manager,
+            clock = conn.clock,
+            inbox = conn.inbox,
+            send = conn::send,
+            connected = { conn.connected },
+            host = this,
+        )
+        conn.start()
+    }
+
+    // The serial matches `adb devices`, which makes headsets easy to map; ANDROID_ID is the fallback.
+    @Suppress("DEPRECATION")
+    private fun serial(): String = try {
+        Build.SERIAL ?: ""
+    } catch (e: SecurityException) {
+        ""
+    }
+
+    private fun deviceId(): String {
+        val s = serial()
+        if (s.isNotEmpty() && s != Build.UNKNOWN) return s
+        return Settings.Secure.getString(contentResolver, Settings.Secure.ANDROID_ID) ?: "unknown"
+    }
+
+    // PlayerHost. Called on the main thread from the controller's tick.
+
+    override fun onVideoCommand(cmd: VideoCommand) {
+        Log.i(TAG, "Video command ${cmd.video} ${cmd.projection}/${cmd.stereo}")
+    }
+
+    override fun setVolume(volume: Double) {
+        player?.setVolume(volume.toFloat())
     }
 
     private fun applyMode(newMode: DisplayMode) {
@@ -177,15 +246,15 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
     private fun redrawPanel() {
         if (!resumed) return
         val exo = player
-        val file = videoFile
-        val line2 = if (file == null) {
-            "No video in ${PlayerInfo.VIDEO_DIR}"
-        } else {
-            PanelText.videoLine(
-                file.name,
-                ((exo?.time ?: 0.0) * 1000).toLong(),
-                if (exo != null && exo.length > 0) (exo.length * 1000).toLong() else -1L,
-            )
+        val c = controller
+        val title = c?.deviceName?.takeIf { it.isNotEmpty() } ?: "SyncVR"
+        val line2 = when {
+            exo != null && exo.loadedVideo != null -> PanelText.videoLine(
+                exo.loadedVideo,
+                ((exo.time) * 1000).toLong(),
+                if (exo.length > 0) (exo.length * 1000).toLong() else -1L,
+            ) + "  [" + (c?.engine?.reportedState ?: "") + "]"
+            else -> "$title: ${connection?.status ?: "starting"}"
         }
         val nativeStatus = if (handle != 0L) NativeBridge.nativeGetStatus(handle) else "native not running"
         val line3 = player?.error?.let { "Player error: $it" } ?: nativeStatus
@@ -195,5 +264,6 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
     private companion object {
         const val TAG = "SyncVR"
         const val PANEL_REFRESH_MS = 1000L
+        const val LOOP_INTERVAL_MS = 16L
     }
 }
