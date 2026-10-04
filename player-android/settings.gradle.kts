@@ -19,4 +19,7 @@ include(":core")
 // The Android app needs an Android SDK; without one, only :core (plain Kotlin) is built.
 val hasAndroidSdk = System.getenv("ANDROID_HOME") != null || System.getenv("ANDROID_SDK_ROOT") != null ||
     file("local.properties").let { it.exists() && it.readText().contains("sdk.dir") }
-if (hasAndroidSdk) include(":app")
+if (hasAndroidSdk) {
+    include(":app")
+    include(":operator") // phone/tablet operator app, no native code
+}
