@@ -291,7 +291,7 @@ class SimHeadset:
         tasks = [asyncio.create_task(t) for t in (self._pinger(), self._ticker(), self._reporter())]
         try:
             while True:
-                line = await asyncio.wait_for(reader.readline(), 15)
+                line = await _readline(reader, 15)
                 if not line:
                     break
                 t1 = self.clock()
@@ -461,6 +461,22 @@ class SimHeadset:
         if have != size:
             raise ValueError(f"size mismatch: got {have}, expected {size}")
         os.replace(part, dest)
+
+
+async def _readline(reader, timeout: float) -> bytes:
+    """reader.readline() with a timeout that cannot swallow a cancellation.
+
+    asyncio.wait_for before Python 3.12 drops a cancel() that lands when the line
+    arrives in the same loop step, leaving the simulator running forever.
+    """
+    task = asyncio.ensure_future(reader.readline())
+    try:
+        done, _ = await asyncio.wait({task}, timeout=timeout)
+        if not done:
+            raise asyncio.TimeoutError()
+        return task.result()
+    finally:
+        task.cancel()
 
 
 def aiohttp_timeout():
