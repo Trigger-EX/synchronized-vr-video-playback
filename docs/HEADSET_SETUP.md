@@ -27,6 +27,7 @@ Then, after each push has gone green, from your checkout of the branch:
 git pull
 git apk              # writes ./SyncVRPlayer.apk (repo root) and prints which commit it was built from
 git apk --install    # same, then adb install -r onto the connected headset
+git apk --launch     # install, then (re)start the app on the headset
 git apk main         # the APK of another branch
 ```
 

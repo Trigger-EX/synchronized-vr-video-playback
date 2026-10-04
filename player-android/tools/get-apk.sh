@@ -1,13 +1,15 @@
 #!/usr/bin/env bash
 # Downloads the APK that CI built for a branch (default: the current one) from the git branch
-# apk/<branch>, into ./SyncVRPlayer.apk. With --install, also installs it on the connected headset.
-# Usage: get-apk.sh [branch] [--install]     (or, after the one-time alias: git apk [--install])
+# apk/<branch>, into ./SyncVRPlayer.apk. With --install, also installs it on the connected headset;
+# with --launch, installs it and then (re)starts the app.
+# Usage: get-apk.sh [branch] [--install|--launch]   (or, after the one-time alias: git apk [--launch])
 set -euo pipefail
 
-branch="" install=0
+branch="" install=0 launch=0
 for arg in "$@"; do
   case "$arg" in
     --install) install=1 ;;
+    --launch) install=1 launch=1 ;;
     *) branch="$arg" ;;
   esac
 done
@@ -29,4 +31,7 @@ echo "Saved $(pwd)/SyncVRPlayer.apk"
 
 if [ "$install" = 1 ]; then
   adb install -r SyncVRPlayer.apk
+fi
+if [ "$launch" = 1 ]; then
+  adb shell am start -S -n com.syncvr.player/.MainActivity
 fi
