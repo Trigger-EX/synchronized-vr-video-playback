@@ -13,7 +13,7 @@ from . import __version__
 from .analysis import CACHE_FILE, ContentAnalyzer
 from .controller import Controller
 from .discovery import DiscoveryBeacon, default_broadcast_addresses, local_ipv4_addresses
-from .headset_server import HeadsetServer
+from .headset_server import HeadsetServer, runner_kwargs
 from .library import Library
 from .protocol import (DEFAULT_DISCOVERY_PORT, DEFAULT_HTTP_PORT, DEFAULT_TCP_PORT, PROTOCOL_VERSION,
                        SERVICE_NAME)
@@ -91,9 +91,10 @@ class SyncServer:
         loop = asyncio.get_running_loop()
         self.analyzer.on_update = lambda: loop.call_soon_threadsafe(self.controller.changed)
         await self.headsets.start()
-        self._runner = web.AppRunner(self.web.app, access_log=None, shutdown_timeout=SHUTDOWN_TIMEOUT_S)
+        self._runner = web.AppRunner(self.web.app, access_log=None, **runner_kwargs(SHUTDOWN_TIMEOUT_S))
         await self._runner.setup()
-        site = web.TCPSite(self._runner, self.config.host, self.config.http_port)
+        site = web.TCPSite(self._runner, self.config.host, self.config.http_port,
+                           **({} if runner_kwargs(0) else {"shutdown_timeout": SHUTDOWN_TIMEOUT_S}))
         await site.start()
         if self.config.http_port == 0:
             self.config.http_port = self._runner.addresses[0][1]

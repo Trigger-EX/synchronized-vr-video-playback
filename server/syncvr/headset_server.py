@@ -5,11 +5,21 @@ import logging
 import socket
 from urllib.parse import quote
 
+import aiohttp
 from aiohttp import web
 
 from .protocol import MAX_LINE_BYTES, decode, encode, server_clock
 
 log = logging.getLogger(__name__)
+
+
+def runner_kwargs(timeout: float) -> dict:
+    """AppRunner shutdown_timeout exists from aiohttp 3.9; older versions pass it on to the handler and crash."""
+    try:
+        new = tuple(int(x) for x in aiohttp.__version__.split(".")[:2]) >= (3, 9)
+    except ValueError:
+        new = False
+    return {"shutdown_timeout": timeout} if new else {}
 
 HELLO_TIMEOUT_S = 10.0
 # Headsets send status every second; after this much silence the link is dead.
@@ -129,7 +139,7 @@ class HeadsetServer:
     async def start(self) -> None:
         # Content downloads share the headset port: some networks only let this one through.
         if self.content_app is not None:
-            self._runner = web.AppRunner(self.content_app, access_log=None, shutdown_timeout=2.0)
+            self._runner = web.AppRunner(self.content_app, access_log=None, **runner_kwargs(2.0))
             await self._runner.setup()
         loop = asyncio.get_running_loop()
         self.server = await loop.create_server(lambda: _Sniffer(self), self.host, self.port)
