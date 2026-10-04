@@ -5,11 +5,12 @@
 | Port | Transport | Purpose |
 |---|---|---|
 | 8080 | HTTP | Dashboard, JSON API, WebSocket feed (`/ws`), content downloads (`/content/<name>`) |
-| 8765 | TCP | Headset control connection |
+| 8765 | TCP | Headset control connection; also serves content downloads (`GET`/`HEAD /content/<name>`, nothing else), told apart by the first bytes |
 | 8766 | UDP | Discovery beacons (server → broadcast) |
 
 All three can be changed with `serve` options; headsets learn the TCP port from the
-beacon and the HTTP port from the `welcome` message.
+beacon and the HTTP port from the `welcome` message. Download URLs sent to headsets
+use the TCP port, so headsets only need 8765; 8080 is just the dashboard.
 
 ## Discovery
 

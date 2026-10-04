@@ -340,3 +340,62 @@ async def test_headsets_verify_checksums(server, fleet):
     await wait_for(lambda: not server.controller.distributor.active, timeout=15)
     assert not (bad.download_dir / name).exists()
     assert name not in server.controller.devices[bad.device_id].inventory
+
+
+async def test_content_served_on_tcp_port(server):
+    name = "trailer_flat.mp4"
+    src = (server.library.root / name).read_bytes()
+    base = f"http://127.0.0.1:{server.tcp_port}/content/{name}"
+    async with aiohttp.ClientSession() as s:
+        async with s.get(base) as r:
+            assert r.status == 200 and await r.read() == src
+            assert r.headers["X-Content-SHA256"] == server.library.sha256_of(name)
+        async with s.head(base) as r:
+            assert r.status == 200 and int(r.headers["Content-Length"]) == len(src)
+        async with s.get(base, headers={"Range": "bytes=10-19"}) as r:
+            assert r.status == 206 and await r.read() == src[10:20]
+            assert r.headers["X-Content-SHA256"] == server.library.sha256_of(name)
+        async with s.get(f"http://127.0.0.1:{server.tcp_port}/content/..%2Fstate.json") as r:
+            assert r.status == 404
+        async with s.get(f"http://127.0.0.1:{server.tcp_port}/api/state") as r:
+            assert r.status == 404
+
+
+async def test_silent_connection_times_out(server, monkeypatch):
+    monkeypatch.setattr("syncvr.headset_server.HELLO_TIMEOUT_S", 0.3)
+    reader, writer = await asyncio.open_connection("127.0.0.1", server.tcp_port)
+    assert await asyncio.wait_for(reader.read(), 3) == b""
+    writer.close()
+
+
+async def test_hello_in_one_byte_writes(server):
+    reader, writer = await asyncio.open_connection("127.0.0.1", server.tcp_port)
+    for ch in b'{"type":"hello","device_id":"slow-1","name":"slow"}\n':
+        writer.write(bytes([ch]))
+        await writer.drain()
+        await asyncio.sleep(0.005)
+    await wait_for(lambda: "slow-1" in server.controller.devices
+                   and server.controller.devices["slow-1"].conn is not None)
+    writer.close()
+
+
+async def test_manifest_url_uses_tcp_port(server, fleet):
+    headsets = await fleet(1)
+    await api(server, "sync_content", videos=["trailer_flat.mp4"])
+    conn = server.controller.devices[headsets[0].device_id].conn
+    assert conn.content_url("a b.mp4") == f"http://127.0.0.1:{server.tcp_port}/content/a%20b.mp4"
+    assert str(server.http_port) != str(server.tcp_port)
+
+
+async def test_stop_with_open_keepalive_http(content_dir, tmp_path):
+    config = ServerConfig(content_dir=content_dir, data_dir=tmp_path / "data", host="127.0.0.1",
+                          http_port=0, tcp_port=0, discovery=False)
+    srv = SyncServer(config)
+    await srv.start()
+    reader, writer = await asyncio.open_connection("127.0.0.1", srv.tcp_port)
+    writer.write(b"GET /content/trailer_flat.mp4 HTTP/1.1\r\nHost: x\r\nConnection: keep-alive\r\n"
+                 b"Range: bytes=0-9\r\n\r\n")
+    await writer.drain()
+    await reader.readuntil(b"\r\n\r\n")
+    await asyncio.wait_for(srv.stop(), 5)
+    writer.close()

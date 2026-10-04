@@ -55,9 +55,12 @@ class SyncServer:
         if config.max_downloads is not None:
             self.controller.set_max_downloads(config.max_downloads)
         self.library.scan()
-        self.headsets = HeadsetServer(self.controller, config.host, config.tcp_port, config.http_port,
-                                      config.public_host)
         self.web = WebApp(self.controller, password=config.password)
+        # Headsets download on their own TCP port; it only ever serves content.
+        content_app = web.Application()
+        content_app.router.add_get("/content/{name}", self.web.get_content)
+        self.headsets = HeadsetServer(self.controller, config.host, config.tcp_port, config.http_port,
+                                      config.public_host, content_app)
         self.beacon = None
         self._runner = None
         self._tasks = []
