@@ -224,34 +224,67 @@ def run(args) -> int:
             if problems:
                 raise RuntimeError("; ".join(problems))
 
-        def enable_vrshell(s):
+        def player_installed(s):
+            listing = adb.shell(s, f"pm list packages {adb.package}", check=False)
+            return f"package:{adb.package}" in [line.strip() for line in listing.splitlines()]
+
+        def try_enable(s):
             adb.shell(s, f"pm enable {VRSHELL}", check=False)
             if vrshell_disabled(s):
                 adb.shell(s, f"pm enable --user 0 {VRSHELL}", check=False)
-            if vrshell_disabled(s):
-                raise RuntimeError(
-                    f"{VRSHELL} is still disabled (listed by 'pm list packages -d'); "
-                    f"run 'kiosk restore --root' over USB")
+            return not vrshell_disabled(s)
+
+        def enable_vrshell(s, already_root=False):
+            if try_enable(s):
+                return
+            # Shell may lack permission to enable (SecurityException); retry as root.
+            if not already_root:
+                try:
+                    adb.run(s, "root", check=False)
+                    adb.run(s, "wait-for-device", check=False)
+                    if try_enable(s):
+                        return
+                finally:
+                    adb.run(s, "unroot", check=False)
+                    adb.run(s, "wait-for-device", check=False)
+            raise RuntimeError(
+                f"{VRSHELL} is still disabled (listed by 'pm list packages -d'); recover manually: "
+                f"adb -s {s} root && adb -s {s} shell pm enable {VRSHELL} && "
+                f"adb -s {s} shell pm enable --user 0 {VRSHELL} && adb -s {s} unroot "
+                f"(then 'kiosk restore --root' or reboot the headset)")
 
         def kiosk_on(s):
-            if args.root:
-                adb.run(s, "root")
-                adb.run(s, "wait-for-device")
-                outs = [adb.shell(s, f"pm disable {VRSHELL}", check=False)]
-                outs.append(broadcast(s, True))
-                set_home(s, alias)
-                adb.run(s, "unroot")
-                adb.run(s, "wait-for-device")
-                set_home(s, alias)
-            else:
-                outs = [adb.shell(s, f"pm disable-user --user 0 {VRSHELL}", check=False)]
-                outs.append(broadcast(s, True))
-                set_home(s, alias)
-            fail_on(outs)
-            home = current_home(s)
-            if not home.startswith(f"{adb.package}/"):
-                raise RuntimeError(f"home is {home or 'unresolved'}, not the player; "
-                                   f"pick SyncVR in the home chooser, or run 'kiosk on --root' over USB")
+            if not player_installed(s):
+                raise RuntimeError(f"{adb.package} is not installed; refusing to disable {VRSHELL} "
+                                   f"(headset would be left without a home). Run 'setup' first")
+            try:
+                if args.root:
+                    adb.run(s, "root")
+                    adb.run(s, "wait-for-device")
+                    outs = [adb.shell(s, f"pm disable {VRSHELL}", check=False)]
+                    outs.append(broadcast(s, True))
+                    set_home(s, alias)
+                    adb.run(s, "unroot")
+                    adb.run(s, "wait-for-device")
+                    set_home(s, alias)
+                else:
+                    outs = [adb.shell(s, f"pm disable-user --user 0 {VRSHELL}", check=False)]
+                    outs.append(broadcast(s, True))
+                    set_home(s, alias)
+                fail_on(outs)
+                home = current_home(s)
+                if not home.startswith(f"{adb.package}/"):
+                    raise RuntimeError(f"home is {home or 'unresolved'}, not the player; "
+                                       f"pick SyncVR in the home chooser, or run 'kiosk on --root' over USB")
+            except Exception as e:
+                # vrshell may be disabled by now: never leave the headset without a home.
+                try:
+                    broadcast(s, False)
+                    enable_vrshell(s)
+                    set_home(s, vrshell_home)
+                except Exception as e2:
+                    raise RuntimeError(f"{e}; automatic recovery FAILED: {e2}") from e
+                raise RuntimeError(f"{e}; {VRSHELL} was re-enabled") from e
 
         def kiosk_off(s, restore):
             if restore and args.root:
@@ -260,7 +293,7 @@ def run(args) -> int:
             try:
                 if restore:
                     adb.shell(s, f"pm unhide {VRSHELL}", check=False)
-                enable_vrshell(s)
+                enable_vrshell(s, already_root=restore and args.root)
                 outs = [broadcast(s, False), set_home(s, vrshell_home)]
                 fail_on(outs)
                 home = current_home(s)

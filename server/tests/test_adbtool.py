@@ -55,16 +55,27 @@ def sh(cmd):
     return ["adb", "-s", "A1", "shell", cmd]
 
 
-def fake_device(home, disabled=(), enable_fixes=True):
+PM_PLAYER = "pm list packages com.syncvr.player"
+
+
+def fake_device(home, disabled=(), enable_fixes=True, installed=True, needs_root=False):
     """Output function emulating a headset: `home` is what HOME resolves to,
     `disabled` what `pm list packages -d` lists until `pm enable --user 0` (if enable_fixes)."""
-    state = {"disabled": list(disabled)}
+    state = {"disabled": list(disabled), "root": False}
 
     def out(cmd):
         c = cmd[-1]
+        if c == "root":
+            state["root"] = True
+        if c == "unroot":
+            state["root"] = False
+        if c == PM_PLAYER:
+            return "package:com.syncvr.player" if installed else ""
+        if needs_root and not state["root"] and c.startswith("pm enable"):
+            return "Exception occurred: SecurityException: Shell cannot change component state"
         if c == "pm list packages -d":
             return "\n".join(f"package:{p}" for p in state["disabled"])
-        if c == "pm enable --user 0 com.oculus.vrshell" and enable_fixes:
+        if c.startswith("pm enable --user 0") and enable_fixes:
             state["disabled"] = []
         if c == RESOLVE:
             return f"priority=0 preferredOrder=0\n{home}"
@@ -76,6 +87,7 @@ def test_kiosk_on():
     calls = []
     assert run_cli(["-s", "A1", "kiosk", "on"], calls, output=fake_device("com.syncvr.player/.HomeAlias")) == 0
     assert calls == [
+        sh(PM_PLAYER),
         sh("pm disable-user --user 0 com.oculus.vrshell"),
         sh(BCAST_ON),
         sh(ALIAS),
@@ -88,6 +100,7 @@ def test_kiosk_on_root():
     assert run_cli(["-s", "A1", "kiosk", "on", "--root"], calls,
                    output=fake_device("com.syncvr.player/.HomeAlias")) == 0
     assert calls == [
+        sh(PM_PLAYER),
         ["adb", "-s", "A1", "root"],
         ["adb", "-s", "A1", "wait-for-device"],
         sh("pm disable com.oculus.vrshell"),
@@ -104,6 +117,48 @@ def test_kiosk_on_fails_when_home_not_player():
     calls = []
     assert run_cli(["-s", "A1", "kiosk", "on"], calls,
                    output=fake_device("android/com.android.internal.app.ResolverActivity")) == 1
+    assert sh("pm enable com.oculus.vrshell") in calls  # recovered
+
+
+def test_kiosk_on_refuses_when_player_not_installed(capsys):
+    calls = []
+    assert run_cli(["-s", "A1", "kiosk", "on"], calls,
+                   output=fake_device("com.oculus.vrshell/.MainActivity", installed=False)) == 1
+    assert calls == [sh(PM_PLAYER)]
+    assert "not installed" in capsys.readouterr().out
+
+
+def test_kiosk_on_verification_failure_reenables_via_root_fallback():
+    calls = []
+    out = fake_device("android/com.android.internal.app.ResolverActivity",
+                      disabled=["com.oculus.vrshell"], needs_root=True)
+    assert run_cli(["-s", "A1", "kiosk", "on"], calls, output=out) == 1
+    assert ["adb", "-s", "A1", "root"] in calls and ["adb", "-s", "A1", "unroot"] in calls
+    assert calls.index(["adb", "-s", "A1", "root"]) > calls.index(sh("pm disable-user --user 0 com.oculus.vrshell"))
+
+
+def test_kiosk_off_root_fallback_without_flag():
+    calls = []
+    out = fake_device("com.oculus.vrshell/.MainActivity", disabled=["com.oculus.vrshell"], needs_root=True)
+    assert run_cli(["-s", "A1", "kiosk", "off"], calls, output=out) == 0
+    assert ["adb", "-s", "A1", "root"] in calls
+    assert calls.index(["adb", "-s", "A1", "unroot"]) < calls.index(sh(BCAST_OFF))
+
+
+def test_restore_root_fallback_without_flag():
+    calls = []
+    out = fake_device("com.oculus.vrshell/.MainActivity", disabled=["com.oculus.vrshell"], needs_root=True)
+    assert run_cli(["-s", "A1", "kiosk", "restore"], calls, output=out) == 0
+    assert ["adb", "-s", "A1", "root"] in calls
+
+
+def test_kiosk_off_still_disabled_prints_manual_commands(capsys):
+    calls = []
+    out = fake_device("com.oculus.vrshell/.MainActivity", disabled=["com.oculus.vrshell"],
+                      enable_fixes=False, needs_root=True)
+    assert run_cli(["-s", "A1", "kiosk", "off"], calls, output=out) == 1
+    text = capsys.readouterr().out
+    assert "adb -s A1 root" in text and "pm enable --user 0 com.oculus.vrshell" in text
 
 
 def test_kiosk_off_restores_vrshell_home():
