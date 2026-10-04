@@ -1,6 +1,6 @@
 ---
 name: cp
-description: Save a checkpoint to docs/handoff.md so a fresh session can continue this work. Use when the user types cp, checkpoint, handoff, or wrap up, or when the session-hygiene rules in CLAUDE.md say to end the session.
+description: Save a checkpoint to docs/handoff.md so a fresh session can continue this work. Run only when the user types cp, checkpoint, handoff or wrap up, or when a hook message says to.
 ---
 1. Write docs/handoff.md, under 300 words, with these headings:
    - Goal (1-2 sentences)
