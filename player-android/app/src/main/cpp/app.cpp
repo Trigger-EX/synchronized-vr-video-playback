@@ -158,6 +158,14 @@ void App::SetVideoAspect(float aspect) {
     if (aspect > 0.1f && aspect < 10.0f) videoAspect_.store(aspect);
 }
 
+void App::Recenter() {
+    recenterRequested_.store(true);
+}
+
+void App::SetPanelProminent(bool prominent) {
+    panelProminent_.store(prominent);
+}
+
 std::string App::GetStatus() {
     std::lock_guard<std::mutex> lock(statusMutex_);
     return status_;
@@ -513,7 +521,13 @@ void App::UpdateFps(int mode) {
 void App::RunFrame(JNIEnv* env) {
     frameIndex_++;
     const double displayTime = vrapi_GetPredictedDisplayTime(ovr_, frameIndex_);
-    const ovrTracking2 tracking = vrapi_GetPredictedTracking2(ovr_, displayTime);
+    const ovrTracking2 rawTracking = vrapi_GetPredictedTracking2(ovr_, displayTime);
+    if (recenterRequested_.exchange(false)) {
+        yaw_ = HeadYaw(rawTracking);
+        LOGI("Recenter: yaw %.1f degrees", yaw_ * 57.29578f);
+    }
+    // Everything drawn is fixed to the recentered direction (cylinder layers and the sphere).
+    const ovrTracking2 tracking = RecenteredTracking(rawTracking, yaw_);
 
     const int mode = mode_.load();
     if (mode != lastMode_) {
@@ -552,17 +566,17 @@ void App::RunFrame(JNIEnv* env) {
             layers[layerCount++] = &videoLayer.Header;
             break;
         case kModeEquirectStereoTb:
-            equirectLayer = MakeEquirectLayer(tracking, videoChain_, true);
+            equirectLayer = MakeEquirectLayer(rawTracking, videoChain_, true, yaw_);
             layers[layerCount++] = &equirectLayer.Header;
             break;
         case kModeEquirectMono:
         default:
-            equirectLayer = MakeEquirectLayer(tracking, videoChain_, false);
+            equirectLayer = MakeEquirectLayer(rawTracking, videoChain_, false, yaw_);
             layers[layerCount++] = &equirectLayer.Header;
             break;
     }
 
-    panelLayer = MakeCylinderLayer(tracking, panelChain_, PanelPlacement(), true);
+    panelLayer = MakeCylinderLayer(tracking, panelChain_, PanelPlacement(panelProminent_.load()), true);
     layers[layerCount++] = &panelLayer.Header;
 
     ovrSubmitFrameDescription2 frameDesc = {};

@@ -1,12 +1,39 @@
 {
   "model": "opusplan",
   "modelSettings": {
-    "claude-opus-5-5": { "effortLevel": "high" },
-    "claude-sonnet-5-5": { "effortLevel": "medium" }
+    "claude-opus-5-5": {
+      "effortLevel": "high"
+    },
+    "claude-sonnet-5-5": {
+      "effortLevel": "medium"
+    }
   },
   "autoCompactWindow": 200000,
   "workflowSizeGuideline": "small",
   "env": {
     "CLAUDE_CODE_SUBAGENT_MODEL": "sonnet"
+  },
+  "hooks": {
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash \"$CLAUDE_PROJECT_DIR\"/.claude/hooks/cp-counter.sh"
+          }
+        ]
+      }
+    ],
+    "SessionStart": [
+      {
+        "matcher": "clear",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash \"$CLAUDE_PROJECT_DIR\"/.claude/hooks/cp-counter.sh reset"
+          }
+        ]
+      }
+    ]
   }
 }

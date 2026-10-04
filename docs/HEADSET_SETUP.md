@@ -1,22 +1,50 @@
 # Headset setup (Oculus Go)
 
 The headset app is the native player in [`player-android/`](../player-android): Kotlin and C++
-on Oculus VrApi 1.36, with ExoPlayer for video. Its package name is `com.syncvr.player`, so it
+on Oculus VrApi 1.32, with ExoPlayer for video. Its package name is `com.syncvr.player`, so it
 replaces the old Unity app on a headset and uses the same video folder.
 
-**Current state:** the native player is a diagnostic build for
-[Checkpoint 1](#checkpoint-1-hardware-check). It plays one video but doesn't connect to the
-server yet. That comes in phase 1B (see [EXECUTION_PLAN.md](EXECUTION_PLAN.md)). Until then,
-the only app that can run a synced show is the Unity one, described in
-[UNITY_PLAYER.md](UNITY_PLAYER.md).
+**No Unity is needed.** The APK is built by CI; you only need `adb`, Python 3.8+ and this repo.
+The player discovers the server by UDP broadcast, connects, follows play/pause/seek on the shared
+clock, downloads content, reports telemetry and shows its name and connection state while idle.
+It has not yet been checked on hardware (see [Checkpoint 1](#checkpoint-1-hardware-check) and
+Checkpoint 2 in [EXECUTION_PLAN.md](EXECUTION_PLAN.md)). The old Unity app is legacy: see
+[UNITY_PLAYER.md](UNITY_PLAYER.md). Both use the package `com.syncvr.player`, so installing one
+replaces the other.
+
+**Quick path:** download the APK (below), then with headsets on USB, from `server/`:
+
+```bash
+cd server && python3 -m pip install -e .          # use a venv (python3 -m venv .venv) if pip is externally-managed
+python3 -m syncvr adb setup ../SyncVRPlayer.apk   # install, write config, proximity off, launch
+python3 -m syncvr adb push ../content/*.mp4       # optional: USB preload
+python3 -m syncvr serve                           # headsets appear in the dashboard
+```
 
 ## Getting the APK
 
-Nothing needs building on your machine. GitHub Actions builds and signs the APK on every push.
+Nothing needs building on your machine. GitHub Actions builds and signs the APK on every push
+and publishes it to the git branch `apk/<branch>` (one commit, replaced on each build).
 
-1. Open the repository on GitHub → **Actions** → the latest green **CI** run on the branch.
-2. Under **Artifacts**, download **SyncVRPlayer-apk**. It's a zip; unzip it to get
-   `SyncVRPlayer.apk`.
+With git, once per clone, add an alias:
+
+```sh
+git config alias.apk '!player-android/tools/get-apk.sh'
+```
+
+Then, after each push has gone green, from your checkout of the branch:
+
+```sh
+git pull
+git apk              # writes ./SyncVRPlayer.apk (repo root) and prints which commit it was built from
+git apk --install    # same, then adb install -r onto the connected headset
+git apk --launch     # install, then (re)start the app on the headset
+git apk main         # the APK of another branch
+```
+
+If the branch has commits newer than the published APK, `git apk` says so (CI still running or
+failed). Without git: on GitHub → **Actions** → the latest green **CI** run on the branch →
+**Artifacts** → **SyncVRPlayer-apk** (a zip containing `SyncVRPlayer.apk`).
 
 Every build is signed with the same key (stored in the repository secrets), so a newer APK
 installs over an older one without losing videos.
@@ -46,19 +74,25 @@ Other commands: `install`, `configure`, `launch`, `stop`, `prox-off`, `prox-on`,
   `--keep-proximity` to skip it.
 * **Where videos live.** `/sdcard/Android/data/com.syncvr.player/files/videos/`. Reinstalling
   with `adb install -r` (what `install`/`setup` do) keeps them; *uninstalling* the app deletes them.
-* **Fixed server address** (used once the player connects to the server, phase 1B). If UDP
-  broadcast doesn't reach the headsets (client isolation, VLANs), write a config:
-  `python3 -m syncvr adb configure --server 192.168.1.10`. With several servers on one
-  network, `--server-name "Room A"` makes headsets only join the server started with
-  `--name "Room A"`.
+* **Fixed server address.** `python3 -m syncvr adb configure --server 192.168.1.10` (or
+  `--server-name "Room A"`, or `setup --server ...`) writes `config.json` into the app's files folder.
+  The native player does **not** read this file yet: it always uses UDP broadcast discovery, so
+  broadcast must reach the headsets (no client isolation; `serve --broadcast` for other subnets). The
+  file only applies to the legacy Unity app.
+* **USB mode (no firewall rules).** `python3 -m syncvr adb launch --usb` (or `setup APK --usb`)
+  runs `adb reverse tcp:8765 tcp:8765` and `tcp:8080 tcp:8080` on each headset, then starts the app
+  with `--es server 127.0.0.1`, so the headset reaches the server through the USB cable and no
+  discovery or open ports are needed (the default ports only; the server must run on the machine
+  the headsets are plugged into). The reverse is lost on unplug or reboot: replug and rerun
+  `adb launch --usb`. Without `--usb` nothing changes (UDP discovery).
 
-Once the player connects to the server (phase 1B), it shows its name and connection state on a
-dark screen while idle. Headsets use their Android serial number as their ID, which is the same
-serial `adb devices` shows, so it's easy to match a physical headset to its dashboard card.
+Once connected, the player shows its name and connection state on a dark screen while idle. The
+dashboard shows `native` as the player type. Headsets use their Android serial number as their ID,
+the same serial `adb devices` shows, so it's easy to match a physical headset to its dashboard card.
 
 ## Checkpoint 1 (hardware check)
 
-This first build plays one video and cycles through four ways of showing it. The goal is to
+The player still cycles through four ways of showing a video (it keeps doing so while connected). The goal is to
 find out which display path works on the Go. It takes about 15 minutes with one headset.
 
 ### Install and copy a video

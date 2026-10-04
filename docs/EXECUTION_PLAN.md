@@ -36,8 +36,8 @@ Goal: answer the risky questions about the Go before building everything on top 
 1. **Project setup.** Create `player-android/` (Gradle, Kotlin, minimum Android 7.1 / API 25,
    32-bit ARM). It has two modules: `core`, plain Kotlin for logic that is testable anywhere, and
    `app`, the Android app.
-2. **Meta SDK.** CI downloads Oculus Mobile SDK **19.0 (VrApi 1.36)**, the last version that
-   supports the Go, from a public mirror pinned to an exact commit and checksum. It is never
+2. **Meta SDK.** CI downloads Oculus Mobile SDK **15.0 (VrApi 1.32)**; the Go's final OS (VrApi
+   1.1.35) rejects newer loaders, from a public mirror pinned to an exact commit and checksum. It is never
    committed to the repo.
 3. **VR loop in C++** (`app/src/main/cpp`). Enter VR mode, run the frame loop, create an Android
    surface swapchain, and submit compositor layers: equirect (360/180, stereo via per-eye halves),
@@ -55,6 +55,17 @@ Goal: answer the risky questions about the Go before building everything on top 
 `syncvr adb setup`, copy any 360 video over with `syncvr adb push`, and tell me which modes looked
 right. Also send the `adb logcat` lines tagged `SyncVR`. This decides whether the main path is the
 compositor layer or the fallback sphere.
+
+**Checkpoint 1 results (2026-10-03, Go on its final OS, VrApi 1.32, 2880×1440 mono H.264 video):**
+* All four modes showed video at a steady ~60 fps. Equirect layer (mode 1) and sphere fallback
+  (mode 2) both looked like normal playback. Mode 1 becomes the main path, and mode 2 is kept as a fallback.
+* Cylinder (mode 3): a flat screen in front of the viewer, as intended.
+* Stereo top/bottom (mode 4) with a mono video: one eye saw the sky and the other the ground. This is
+  expected, because each eye gets half of a mono frame. The eye order still needs a real top/bottom 3D video.
+* Hardware decoders (AVC and HEVC) accept up to 4096×2048 at 30 fps, but not 5120×2560. This
+  matches the defaults in `server/syncvr/limits.py`.
+* Sleep/wake and the Oculus button: VR mode is left and re-entered cleanly, and playback resumes
+  locally. In 1B it must instead resync to the operator's position (step 7 below).
 
 ## Phase 3, part 1 (while waiting for checkpoint 1): content checks and checksums
 
