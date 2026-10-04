@@ -19,6 +19,7 @@ import webbrowser
 from pathlib import Path
 from typing import List, Optional
 
+from . import paths
 from .protocol import DEFAULT_DISCOVERY_PORT, DEFAULT_HTTP_PORT, DEFAULT_TCP_PORT
 
 log = logging.getLogger(__name__)
@@ -70,6 +71,17 @@ def load_overrides(data_dir: Path) -> dict:
         return loaded if isinstance(loaded, dict) else {}
     except (OSError, ValueError):
         return {}
+
+
+def save_override(data_dir: Path, key: str, value) -> None:
+    """Persist one setting in launcher.json, keeping the others."""
+    data_dir = Path(data_dir)
+    data = load_overrides(data_dir)
+    data[key] = value
+    data_dir.mkdir(parents=True, exist_ok=True)
+    tmp = data_dir / "launcher.json.tmp"
+    tmp.write_text(json.dumps(data, indent=2), encoding="utf-8")
+    os.replace(tmp, data_dir / "launcher.json")
 
 
 def setup_logging(data_dir: Path, verbose: bool = False) -> Path:
@@ -226,17 +238,17 @@ class ServerThread:
 
 def _make_config(args):
     from .app import ServerConfig  # lazy: needs aiohttp
-    data_dir = Path(args.data) if args.data else BASE_DIR / "data"
+    data_dir = Path(args.data) if args.data else paths.data_dir()
     ov = load_overrides(data_dir)
-    content = args.content or ov.get("content") or str(BASE_DIR / "content")
+    content = args.content or ov.get("content") or str(paths.content_dir(data_dir))
     if args.data is None and ov.get("data"):
         data_dir = Path(ov["data"])
     cfg = ServerConfig(
         content_dir=Path(content), data_dir=data_dir,
         http_port=args.http_port if args.http_port is not None else int(ov.get("http_port", DEFAULT_HTTP_PORT)),
-        tcp_port=int(ov.get("tcp_port", DEFAULT_TCP_PORT)),
+        tcp_port=0 if args.self_test else int(ov.get("tcp_port", DEFAULT_TCP_PORT)),
         discovery_port=DEFAULT_DISCOVERY_PORT,
-        discovery=not args.no_discovery, name=ov.get("name", "SyncVR"),
+        discovery=not (args.no_discovery or args.self_test), name=ov.get("name", "SyncVR"),
         password=ov.get("password", ""), public_host=ov.get("public_host", ""))
     cfg.content_dir.mkdir(parents=True, exist_ok=True)
     cfg.data_dir.mkdir(parents=True, exist_ok=True)
@@ -329,8 +341,35 @@ def _already_running(qt_ok: bool, msg: str) -> None:
     print(msg)
 
 
+def _self_test(args) -> int:
+    """Start the server on port 0 with offscreen Qt, take one snapshot through the bridge, exit 0 if it works."""
+    import tempfile
+    os.environ["QT_QPA_PLATFORM"] = "offscreen"
+    try:
+        from .gui.app import self_test
+    except ImportError as exc:
+        print("self-test failed: PySide6 is not available: %s" % exc)
+        return 1
+    with tempfile.TemporaryDirectory(prefix="syncvr-selftest-") as tmp:
+        args.data, args.content, args.http_port = str(Path(tmp) / "data"), str(Path(tmp) / "content"), 0
+        config = _make_config(args)
+        thread = ServerThread(config)
+        try:
+            thread.start()
+            ok = self_test(thread, config, Path(tmp) / "self-test.log")
+        except Exception as exc:
+            print("self-test failed: %s" % exc)
+            return 1
+        finally:
+            thread.stop(5.0)
+    print("self-test ok" if ok else "self-test failed: no snapshot received")
+    return 0 if ok else 1
+
+
 def main(args) -> int:
     """Entry point for ``python -m syncvr gui``."""
+    if getattr(args, "self_test", False):
+        return _self_test(args)
     qt_ok = qt_available(args.console)
     try:
         __import__("aiohttp")  # availability probe
@@ -346,6 +385,19 @@ def main(args) -> int:
                "(close its window, or: pkill -f syncvr) and start again." % config.http_port)
         _already_running(qt_ok, msg)
         return 0
+
+    lock = None
+    if qt_ok:
+        try:
+            from .gui.app import acquire_instance_lock
+            lock = acquire_instance_lock(config.data_dir)
+        except ImportError:
+            lock = None
+        else:
+            if lock is None:
+                log.info("another SyncVR window holds the lock in %s", config.data_dir)
+                _already_running(qt_ok, "SyncVR is already running (its window may be hidden or minimised).")
+                return 0
 
     thread = ServerThread(config)
     try:
@@ -373,4 +425,6 @@ def main(args) -> int:
             run_console(thread, operator_address(thread.snapshot(), config.http_port), log_path)
     finally:
         thread.stop(timeout=5.0)
+        if lock is not None:
+            lock.unlock()
     return 0

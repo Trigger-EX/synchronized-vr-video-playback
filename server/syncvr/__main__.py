@@ -39,6 +39,8 @@ def build_parser() -> argparse.ArgumentParser:
     gui.add_argument("--data", default=None, help="saved state folder (default: server/data)")
     gui.add_argument("--http-port", type=int, default=None, help="API port (default 8080)")
     gui.add_argument("--no-discovery", action="store_true", help="do not broadcast beacons")
+    gui.add_argument("--self-test", action="store_true",
+                     help="start the server on a free port with offscreen Qt, check one snapshot, exit 0 if it works")
     gui.add_argument("--console", action="store_true", help="skip the window, run in the terminal")
 
     simp = sub.add_parser("sim", help="run simulated headsets against a server")

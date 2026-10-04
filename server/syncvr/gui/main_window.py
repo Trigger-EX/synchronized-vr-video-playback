@@ -4,9 +4,9 @@ import time
 from pathlib import Path
 
 from PySide6.QtGui import QAction
-from PySide6.QtWidgets import QLabel, QMainWindow, QTabWidget, QVBoxLayout, QWidget
+from PySide6.QtWidgets import QFileDialog, QLabel, QMainWindow, QMessageBox, QTabWidget, QVBoxLayout, QWidget
 
-from ..launcher import open_path
+from ..launcher import open_path, save_override
 from . import format as fmt
 from .headsets import HeadsetsTab
 from .library import LibraryTab
@@ -46,6 +46,7 @@ class MainWindow(QMainWindow):
 
         file_menu = self.menuBar().addMenu("&File")
         for text, handler in (("Open &content folder", lambda: open_path(Path(self._config.content_dir).resolve())),
+                              ("&Choose content folder...", self.choose_content_folder),
                               ("Open &log file", lambda: open_path(self._log_path)),
                               ("&Quit", self.close)):
             act = QAction(text, self)
@@ -64,6 +65,13 @@ class MainWindow(QMainWindow):
         bridge.result.connect(self.on_result)
         bridge.failed.connect(self.on_failed)
         bridge.stopped.connect(self.on_stopped)
+
+    def choose_content_folder(self) -> None:
+        folder = QFileDialog.getExistingDirectory(self, "Choose content folder", str(self._config.content_dir))
+        if not folder:
+            return
+        save_override(self._config.data_dir, "content", folder)
+        QMessageBox.information(self, "SyncVR", "Content folder set to:\n%s\n\nRestart SyncVR to use it." % folder)
 
     def server_now(self) -> float:
         if not self.snapshot:
