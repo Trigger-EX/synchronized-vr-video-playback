@@ -93,7 +93,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     if py is None:
         py = Path(sys.executable)
         print("SyncVR: using %s without the private environment; the control window needs PySide6, "
-              "so you will probably get the browser dashboard only." % py)
+              "so you will probably get the console mode only." % py)
     return subprocess.call([str(py), "-m", "syncvr"] + argv, cwd=str(SERVER_DIR))
 
 

@@ -4,13 +4,13 @@
 
 | Port | Transport | Purpose |
 |---|---|---|
-| 8080 | HTTP | Dashboard, JSON API, WebSocket feed (`/ws`), content downloads (`/content/<name>`) |
+| 8080 | HTTP | JSON API (operator app, show control), content downloads (`/content/<name>`) |
 | 8765 | TCP | Headset control connection; also serves content downloads (`GET`/`HEAD /content/<name>`, nothing else), told apart by the first bytes |
 | 8766 | UDP | Discovery beacons (server → broadcast) |
 
 All three can be changed with `serve` options; headsets learn the TCP port from the
 beacon and the HTTP port from the `welcome` message. Download URLs sent to headsets
-use the TCP port, so headsets only need 8765; 8080 is just the dashboard.
+use the TCP port, so headsets only need 8765; 8080 is just the operator API.
 
 ## Discovery
 
@@ -40,7 +40,7 @@ object has a `type`. **All times are server-clock seconds** (the server's
 | `inventory` | `files: [{name, size}]` | after connecting and whenever local files change |
 | `status` | see below | every second |
 | `downloads_finished` | `ok: [names]`, `failed: [names]`, `cancelled`, `job` (echoed from `sync_content`; absent from older apps) | end of a `sync_content` job |
-| `event` | `level` (`info`/`warn`/`error`), `message` | noteworthy things (shown in the dashboard log) |
+| `event` | `level` (`info`/`warn`/`error`), `message` | noteworthy things (shown in the operator window log) |
 
 `status` fields: `state` (`idle`, `loading`, `ready`, `playing`, `syncing`, `paused`,
 `ended`, `error`), `video`, `position`, `expected`, `duration`, `drift_ms` (smoothed
@@ -55,7 +55,7 @@ position error, + = ahead), `rate`, `mode`, `seek_time_ms`, `start_latency_ms`,
 |---|---|---|
 | `welcome` | `server_name`, `device_name`, `group`, `http_port`, `server_time`, `settings` | sent on connect |
 | `time_pong` | `id`, `t0` (echoed), `ts` (server clock) | reply to `time_ping`, sent immediately |
-| `settings` | `settings` | sync tuning changed in the dashboard |
+| `settings` | `settings` | sync tuning changed in the operator window |
 | `device_info` | `device_name`, `group` | headset renamed |
 | `play` | `video`, `projection`, `stereo`, `rotation`, `duration`, `pos`, `at`, `loop` | be at `pos` at server time `at` and keep playing (loads the video if needed; joins late if `at` has passed) |
 | `pause` | same, `at` = when to pause | at `at`, pause and show exactly `pos` (also used to load a video and hold it) |
@@ -129,7 +129,7 @@ in sync. Headsets that share an anchor form a *cohort*:
    switches itself to seek-only correction and logs a warning. After the app resumes from
    sleep it re-measures the clock and re-cues.
 
-### Tuning (dashboard › Settings)
+### Tuning (operator window › Settings)
 
 | Setting | Default | Raise it when… |
 |---|---|---|
@@ -143,7 +143,7 @@ in sync. Headsets that share an anchor form a *cohort*:
 
 ## HTTP API
 
-The dashboard uses the same API, so show-control systems (QLab, Bitfocus Companion, Crestron, …) can drive
+The Android operator app uses the same API, so show-control systems (QLab, Bitfocus Companion, Crestron, …) can drive
 SyncVR with plain HTTP calls. With `--password`, send HTTP basic auth (any user name).
 
 | Method & path | Body / result |
@@ -156,15 +156,14 @@ SyncVR with plain HTTP calls. With `--password`, send HTTP basic auth (any user 
 | `POST /api/devices/<id>` | `{"name", "group"}` |
 | `DELETE /api/devices/<id>` | forget an offline headset |
 | `GET /content/<file>` | the video file (supports Range); `X-Content-SHA256` header once the checksum is known |
-| `GET /ws` | WebSocket: pushes `{"type":"state","state":…}`; accepts command objects like `/api/command` |
 
 `targets`: `"all"` (default), `"online"`, a list of headset ids, or `{"group": "Room A"}`. A target list that
 selects no headset is a 400 error.
 
 The result of a command holds `targets` (how many headsets it addressed) and `online` (how many of those are
 connected). For `load`, `play`, `pause`, `seek` and `stop`, when none is online the result also has a
-`warning` string; the command is still remembered and applied when the headsets connect. The dashboard
-shows the warning as a toast.
+`warning` string; the command is still remembered and applied when the headsets connect. The operator window
+shows the warning in its status bar.
 
 Actions:
 

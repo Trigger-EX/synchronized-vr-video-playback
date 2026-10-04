@@ -1,21 +1,16 @@
-"""HTTP side: operator dashboard, JSON API, live WebSocket feed and content downloads."""
+"""HTTP side: JSON API for the Android operator app and show-control systems, and content downloads."""
 
-import asyncio
 import base64
 import binascii
 import hmac
-import json
 import logging
-from pathlib import Path
 
-from aiohttp import WSMsgType, web
+from aiohttp import web
 
 from .controller import CommandError
 
 log = logging.getLogger(__name__)
 
-WEB_ROOT = Path(__file__).parent / "web"
-PUSH_INTERVAL_S = 0.4
 
 
 def _json_error(status: int, message: str) -> web.Response:
@@ -43,15 +38,10 @@ def make_auth_middleware(password: str):
 class WebApp:
     def __init__(self, controller, password: str = ""):
         self.controller = controller
-        self.sockets = set()
-        self._wake = asyncio.Event()
-        self._pusher = None
         middlewares = [make_auth_middleware(password)] if password else []
         self.app = web.Application(middlewares=middlewares, client_max_size=1024 * 1024)
         r = self.app.router
         r.add_get("/", self.index)
-        r.add_static("/static", WEB_ROOT)
-        r.add_get("/ws", self.websocket)
         r.add_get("/api/state", self.get_state)
         r.add_post("/api/command", self.post_command)
         r.add_get("/api/settings", self.get_settings)
@@ -61,58 +51,9 @@ class WebApp:
         r.add_post("/api/devices/{id}", self.post_device)
         r.add_delete("/api/devices/{id}", self.delete_device)
         r.add_get("/content/{name}", self.get_content)
-        self.app.on_startup.append(self._on_startup)
-        self.app.on_shutdown.append(self._on_shutdown)
-        controller.add_listener(self._wake.set)
-
-    async def _on_startup(self, app):
-        self._pusher = asyncio.create_task(self._push_loop())
-
-    async def _on_shutdown(self, app):
-        if self._pusher:
-            self._pusher.cancel()
-        for ws in list(self.sockets):
-            await ws.close()
-
-    async def _push_loop(self):
-        while True:
-            await self._wake.wait()
-            self._wake.clear()
-            if self.sockets:
-                data = json.dumps({"type": "state", "state": self.controller.snapshot()})
-                for ws in list(self.sockets):
-                    try:
-                        await ws.send_str(data)
-                    except (ConnectionError, RuntimeError):
-                        self.sockets.discard(ws)
-            await asyncio.sleep(PUSH_INTERVAL_S)
 
     async def index(self, request):
-        return web.FileResponse(WEB_ROOT / "index.html")
-
-    async def websocket(self, request):
-        ws = web.WebSocketResponse(heartbeat=20)
-        await ws.prepare(request)
-        self.sockets.add(ws)
-        try:
-            await ws.send_str(json.dumps({"type": "state", "state": self.controller.snapshot()}))
-            async for msg in ws:
-                if msg.type != WSMsgType.TEXT:
-                    continue
-                req_id = None
-                try:
-                    req = json.loads(msg.data)
-                    if not isinstance(req, dict):
-                        raise CommandError("expected a JSON object")
-                    req_id = req.get("id")
-                    result = self.controller.execute(req.get("action", ""), req)
-                    reply = {"type": "result", "id": req_id, "ok": True, "result": result}
-                except (CommandError, ValueError, TypeError, KeyError) as exc:
-                    reply = {"type": "result", "id": req_id, "ok": False, "error": str(exc)}
-                await ws.send_str(json.dumps(reply))
-        finally:
-            self.sockets.discard(ws)
-        return ws
+        return web.json_response({"name": "SyncVR API", "state": "/api/state", "command": "/api/command"})
 
     async def get_state(self, request):
         return web.json_response(self.controller.snapshot())

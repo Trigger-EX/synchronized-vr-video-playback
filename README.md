@@ -9,7 +9,7 @@ account and no internet connection.
                  ┌──────────────────────────── local Wi-Fi ───────────────────────────┐
   tablet/laptop  │                                                                    │
   browser ──HTTP─┤  SyncVR server (python -m syncvr serve)                            │
-  dashboard      │   • operator dashboard + JSON API      :8080                       │
+  operator       │   • operator window + JSON API        :8080                       │
                  │   • content downloads (HTTP, resumable) :8080/content/…            │
                  │   • headset control (TCP, JSON lines)   :8765  ◄──┐                │
                  │   • discovery beacon (UDP broadcast)    :8766  ───┼──► headsets    │
@@ -29,7 +29,7 @@ account and no internet connection.
 
 | Headjack capability | SyncVR |
 |---|---|
-| Operator app remote-controls any number of headsets | Web dashboard: open `http://<server>:8080` on a tablet, phone or PC. Several operators can have it open at once. |
+| Operator app remote-controls any number of headsets | Native operator window on the server PC, or the Android operator app on a tablet/phone (enter the "Operator app address"). |
 | Play / pause / seek all headsets in sync | Starts are scheduled on a shared clock (default 1.5 s ahead). Each headset measures its clock offset to the server (NTP-style), its own seek time and start-up latency, and corrects drift continuously. |
 | Stays in sync on imperfect networks | Only the schedule travels over the network, not the timing. Headsets that reconnect or power on mid-show rejoin in sync automatically. |
 | Select headsets / groups | Tap to select; name headsets ("Seat 12") and put them in groups ("Room A"). Commands go to the selection, or to all headsets. |
@@ -39,7 +39,7 @@ account and no internet connection.
 | Send messages to viewers | Text shown inside the headsets. "Identify" shows a headset's name and beeps so you can find it. |
 | Recenter viewers | "Recenter view" makes each viewer's current direction the front of the video. |
 | 360 / 180 / flat, mono / stereo | 360° and 180° equirectangular, mono, top/bottom or side-by-side 3D, and a flat cinema screen. Guessed from file names (`_360_TB`, `_180_SBS`, `_flat`), editable in the Library tab. |
-| Logs | Event log in the dashboard (connects, downloads, errors reported by headsets). |
+| Logs | Event log in the operator window (connects, downloads, errors reported by headsets). |
 
 Not included (yet): Headjack's cloud CMS and analytics, subtitles, viewer-driven kiosk menus,
 and store publishing. See [Roadmap](#roadmap).
@@ -52,14 +52,14 @@ and store publishing. See [Roadmap](#roadmap).
 cd server
 python3 -m pip install -e .          # or: pip install aiohttp
 mkdir content && cp /path/to/*.mp4 content/
-python3 -m syncvr serve              # dashboard on http://<this-machine>:8080
+python3 -m syncvr serve              # API on http://<this-machine>:8080
 ```
 
 Useful options: `--content DIR`, `--name "Room A"`, `--password SECRET` (protects the
 dashboard), `--max-downloads N`, `--broadcast 192.168.1.255` (if headsets on another
 subnet can't find the server). Run `python3 -m syncvr serve --help` for all of them.
 
-No headsets yet? Start 20 simulated ones in another terminal and use the dashboard:
+No headsets yet? Start 20 simulated ones in another terminal and use the operator window or app:
 
 ```bash
 python3 -m syncvr sim --count 20
@@ -82,7 +82,7 @@ The native player has run on hardware (see the status table below).
 ### 3. Run a show
 
 1. Power on the headsets and start **SyncVR Player** (Library › Unknown Sources on the Go; `adb launch` also works).
-   They find the server by themselves and appear in the dashboard.
+   They find the server by themselves and appear in the operator window.
 2. *Headsets* tab: name them and set groups (Edit on each card).
 3. Pick a video, **Push video** if it isn't on the headsets yet (the card shows `3/3 videos`).
 4. **Load** holds everyone on the first frame; **Play** starts everyone together. **Pause**,
@@ -95,12 +95,11 @@ Double-click instead of using a terminal: `Start SyncVR.desktop` (Linux; on Linu
 "Trust and launch" the first time, or run `./start-syncvr.sh`) `Start SyncVR.pyw` (Windows; WSL users
 should start it from Windows, not from inside WSL) or `Start SyncVR.command` (macOS; right-click > Open the
 first time). The first run creates `server/.venv` and downloads aiohttp and PySide6 (~100 MB; needs internet,
-and on Mint `sudo apt install python3-venv`; if the window fails to start, `sudo apt install libxcb-cursor0`). It runs the server, opens the dashboard once, and shows
-a window with the headset count, the dashboard URL and buttons Open dashboard / Open content folder /
-Open log / Stop & quit. Content goes in `server/content`, logs in `server/data/logs/syncvr.log`.
+and on Mint `sudo apt install python3-venv`; if the window fails to start, `sudo apt install libxcb-cursor0`). It runs the server and shows
+a native operator window (headsets, library, settings, log, playback controls) and the "Operator app address" to type into the Android operator app. Content goes in `server/content`, logs in `server/data/logs/syncvr.log`.
 Without PySide6 or a display it runs in the terminal instead (`SYNCVR_NO_VENV=1` skips the venv). Starting it a
-second time while port 8080 is taken just opens the running dashboard. Optional settings go in
-`server/data/launcher.json` (`content`, `http_port`, `name`, `password`, `open_browser`).
+second time while port 8080 is taken shows a message and exits. Optional settings go in
+`server/data/launcher.json` (`content`, `http_port`, `name`, `password`).
 
 ## Network and content recommendations
 
@@ -155,7 +154,7 @@ worst headset under 20 ms once playing.
 server/                 Python package "syncvr"
   syncvr/controller.py  fleet state, commands, content distribution
   syncvr/sync_engine.py reference headset sync algorithm (ported to Kotlin)
-  syncvr/web/           dashboard (plain HTML/CSS/JS, no build step)
+  syncvr/gui/           native Qt operator window (PySide6)
   tests/                pytest suite
 player-android/         native Oculus Go player (Kotlin core + Android/C++ app)
 docs/                   protocol, headset setup guide (native player), improvement and execution plans

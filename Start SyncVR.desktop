@@ -1,7 +1,7 @@
 [Desktop Entry]
 Type=Application
 Name=Start SyncVR
-Comment=Run the SyncVR server and open the dashboard
+Comment=Run the SyncVR server and open the operator panel
 Exec=python3 -c "import os,sys;d=os.path.dirname(__import__('urllib.parse').parse.unquote(sys.argv[1]).replace('file://',''));os.execv('/bin/sh',['sh',os.path.join(d,'start-syncvr.sh')])" %k
 Icon=video-display
 Terminal=false

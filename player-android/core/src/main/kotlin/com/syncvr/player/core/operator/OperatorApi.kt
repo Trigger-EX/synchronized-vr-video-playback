@@ -90,7 +90,7 @@ private fun base64(data: ByteArray): String {
     return sb.toString()
 }
 
-/** Client for the dashboard API in server/syncvr/web.py. Blocking; call it off the UI thread. */
+/** Client for the JSON API in server/syncvr/web.py. Blocking; call it off the UI thread. */
 class OperatorApi(val endpoint: ServerEndpoint, private val transport: HttpTransport = UrlConnectionTransport) {
 
     fun state(): Snapshot {

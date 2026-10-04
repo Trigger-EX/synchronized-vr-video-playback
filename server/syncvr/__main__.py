@@ -16,11 +16,11 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("-v", "--verbose", action="store_true", help="debug logging")
     sub = parser.add_subparsers(dest="command", required=True)
 
-    serve = sub.add_parser("serve", help="run the operator server and dashboard")
+    serve = sub.add_parser("serve", help="run the operator server (JSON API for the operator app)")
     serve.add_argument("--content", default="content", help="folder holding the video files (default: ./content)")
     serve.add_argument("--data", default="data", help="folder for saved state (default: ./data)")
     serve.add_argument("--host", default="0.0.0.0", help="interface to listen on")
-    serve.add_argument("--http-port", type=int, default=DEFAULT_HTTP_PORT, help="dashboard/content port")
+    serve.add_argument("--http-port", type=int, default=DEFAULT_HTTP_PORT, help="API/content port")
     serve.add_argument("--tcp-port", type=int, default=DEFAULT_TCP_PORT, help="headset control port")
     serve.add_argument("--discovery-port", type=int, default=DEFAULT_DISCOVERY_PORT, help="UDP beacon port")
     serve.add_argument("--broadcast", action="append", metavar="ADDR",
@@ -30,16 +30,15 @@ def build_parser() -> argparse.ArgumentParser:
     serve.add_argument("--public-host", default="", metavar="IP",
                        help="address headsets download from (default: the address they connected to; "
                             "set the PC's LAN IP under WSL2/Docker)")
-    serve.add_argument("--password", default="", help="require this password for the dashboard/API")
+    serve.add_argument("--password", default="", help="require this password for the API")
     serve.add_argument("--max-downloads", type=int, default=None,
                        help="headsets downloading content at the same time (0 = unlimited, default 4)")
 
-    gui = sub.add_parser("gui", help="PC control window: runs the server and opens the dashboard")
+    gui = sub.add_parser("gui", help="PC control window: runs the server and shows the operator panel")
     gui.add_argument("--content", default=None, help="video folder (default: server/content)")
     gui.add_argument("--data", default=None, help="saved state folder (default: server/data)")
-    gui.add_argument("--http-port", type=int, default=None, help="dashboard port (default 8080)")
+    gui.add_argument("--http-port", type=int, default=None, help="API port (default 8080)")
     gui.add_argument("--no-discovery", action="store_true", help="do not broadcast beacons")
-    gui.add_argument("--no-browser", action="store_true", help="do not open the browser on start")
     gui.add_argument("--console", action="store_true", help="skip the window, run in the terminal")
 
     simp = sub.add_parser("sim", help="run simulated headsets against a server")

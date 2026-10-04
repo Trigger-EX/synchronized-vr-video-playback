@@ -216,7 +216,11 @@ async def test_dashboard_api(server, fleet):
     base = f"http://127.0.0.1:{server.http_port}"
     async with aiohttp.ClientSession() as s:
         async with s.get(base + "/") as r:
-            assert r.status == 200 and "SyncVR" in await r.text()
+            assert r.status == 200 and (await r.json())["name"] == "SyncVR API"
+        async with s.get(base + "/ws") as r:
+            assert r.status == 404
+        async with s.get(base + "/static/app.js") as r:
+            assert r.status == 404
         async with s.get(base + "/api/state") as r:
             state = await r.json()
         assert len(state["devices"]) == 2 and len(state["library"]) == 2
@@ -242,15 +246,8 @@ async def test_dashboard_api(server, fleet):
             assert r.status == 200
         assert server.library.get("trailer_flat.mp4").rotation == 90
 
-        async with s.ws_connect(base + "/ws") as ws:
-            first = await ws.receive_json(timeout=5)
-            assert first["type"] == "state"
-            await ws.send_json({"action": "volume", "value": 0.5, "id": 7})
-            while True:
-                msg = await ws.receive_json(timeout=5)
-                if msg["type"] == "result":
-                    break
-            assert msg["ok"] and msg["id"] == 7
+        async with s.post(base + "/api/command", json={"action": "volume", "value": 0.5}) as r:
+            assert r.status == 200
         await wait_for(lambda: all(h.volume == 0.5 for h in headsets))
 
         # Range requests are what lets headsets resume downloads.

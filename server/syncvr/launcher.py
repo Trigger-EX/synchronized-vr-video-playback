@@ -39,19 +39,16 @@ def port_in_use(port: int, host: str = "127.0.0.1", timeout: float = 0.5) -> boo
         return False
 
 
-def dashboard_url(snapshot: Optional[dict], http_port: int, lan: bool = True) -> str:
-    host = "localhost"
-    if lan and snapshot:
-        addrs = (snapshot.get("server") or {}).get("addresses") or []
-        if addrs:
-            host = addrs[0]
-    return "http://%s:%d/" % (host, http_port)
+def operator_address(snapshot: Optional[dict], http_port: int) -> str:
+    """ip:port to type into the Android operator app."""
+    addrs = ((snapshot or {}).get("server") or {}).get("addresses") or []
+    return "%s:%d" % (addrs[0] if addrs else "localhost", http_port)
 
 
-def status_lines(snapshot: Optional[dict], url: str) -> List[str]:
+def status_lines(snapshot: Optional[dict], address: str) -> List[str]:
     """Text shown in the control window (and printed in console mode)."""
     if not snapshot:
-        return ["Starting...", "Dashboard: " + url]
+        return ["Starting...", "Operator app address: " + address]
     devices = snapshot.get("devices") or []
     online = sum(1 for d in devices if d.get("online"))
     videos = len(snapshot.get("library") or [])
@@ -61,12 +58,12 @@ def status_lines(snapshot: Optional[dict], url: str) -> List[str]:
     busy = len(dl.get("active") or []) + len(dl.get("queued") or [])
     if busy:
         lines.append("Downloads: %d active or queued" % busy)
-    lines.append("Dashboard: " + url)
+    lines.append("Operator app address: " + address)
     return lines
 
 
 def load_overrides(data_dir: Path) -> dict:
-    """Optional data/launcher.json: content, data, http_port, tcp_port, name, password, open_browser."""
+    """Optional data/launcher.json: content, data, http_port, tcp_port, name, password."""
     try:
         with open(Path(data_dir) / "launcher.json", encoding="utf-8") as f:
             loaded = json.load(f)
@@ -243,7 +240,7 @@ def _make_config(args):
         password=ov.get("password", ""), public_host=ov.get("public_host", ""))
     cfg.content_dir.mkdir(parents=True, exist_ok=True)
     cfg.data_dir.mkdir(parents=True, exist_ok=True)
-    return cfg, bool(ov.get("open_browser", True))
+    return cfg
 
 
 def _offer_install(message: str) -> bool:
@@ -312,13 +309,24 @@ def qt_available(console: bool = False) -> bool:
     return True
 
 
-def run_console(thread: ServerThread, url: str, log_path: Path) -> None:
-    print("SyncVR is running. Dashboard: %s\nLog: %s\nPress Ctrl+C to stop." % (url, log_path))
+def run_console(thread: ServerThread, address: str, log_path: Path) -> None:
+    print("SyncVR is running. Operator app address: %s\nLog: %s\nPress Ctrl+C to stop." % (address, log_path))
     try:
         while thread.running:
             time.sleep(0.5)
     except KeyboardInterrupt:
         pass
+
+
+def _already_running(qt_ok: bool, msg: str) -> None:
+    if qt_ok:
+        try:
+            from .gui.app import show_error
+            show_error("SyncVR", msg)
+            return
+        except Exception:
+            pass
+    print(msg)
 
 
 def main(args) -> int:
@@ -329,16 +337,14 @@ def main(args) -> int:
     except ImportError:
         if not _offer_install("SyncVR needs the 'aiohttp' package, which is not installed."):
             return 1
-    config, open_browser = _make_config(args)
+    config = _make_config(args)
     log_path = setup_logging(config.data_dir, verbose=args.verbose)
-    local_url = dashboard_url(None, config.http_port, lan=False)
 
     if config.http_port and port_in_use(config.http_port):
-        log.info("port %d already in use; opening the running dashboard instead", config.http_port)
-        print("SyncVR is already running on port %d (an earlier server or window?). Opening its dashboard "
-              "instead of starting a new window. Stop the old one (close its window, or: pkill -f syncvr) "
-              "and start again." % config.http_port)
-        open_path(local_url)
+        log.info("port %d already in use; not starting a second one", config.http_port)
+        msg = ("SyncVR is already running on port %d (an earlier server or window?). Stop the old one "
+               "(close its window, or: pkill -f syncvr) and start again." % config.http_port)
+        _already_running(qt_ok, msg)
         return 0
 
     thread = ServerThread(config)
@@ -359,15 +365,12 @@ def main(args) -> int:
             print(msg)
         return 1
 
-    local_url = dashboard_url(None, config.http_port, lan=False)
-    if open_browser and not args.no_browser:
-        open_path(local_url)
     try:
         if qt_ok:
             from .gui.app import run_window
             run_window(thread, config, log_path)
         else:
-            run_console(thread, local_url, log_path)
+            run_console(thread, operator_address(thread.snapshot(), config.http_port), log_path)
     finally:
         thread.stop(timeout=5.0)
     return 0

@@ -19,9 +19,6 @@ syncvr = "syncvr.__main__:main"
 [tool.setuptools]
 packages = ["syncvr", "syncvr.gui"]
 
-[tool.setuptools.package-data]
-syncvr = ["web/*"]
-
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 asyncio_mode = "auto"

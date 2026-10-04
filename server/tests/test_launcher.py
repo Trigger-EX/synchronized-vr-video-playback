@@ -42,7 +42,7 @@ def test_server_thread_start_failure_reports(tmp_path):
 
 
 def test_status_lines():
-    url = "http://x:8080/"
+    url = "10.0.0.2:8080"
     assert launcher.status_lines(None, url)[0] == "Starting..."
     snap = {"devices": [{"online": True}, {"online": False}, {"online": True}],
             "library": [{}, {}], "downloads": {"active": ["a"], "queued": ["b", "c"]}}
@@ -50,14 +50,13 @@ def test_status_lines():
     assert lines[0] == "Headsets: 2 online of 3 known"
     assert "Videos in content folder: 2" in lines
     assert "Downloads: 3 active or queued" in lines
-    assert lines[-1] == "Dashboard: " + url
+    assert lines[-1] == "Operator app address: " + url
 
 
-def test_dashboard_url():
+def test_operator_address():
     snap = {"server": {"addresses": ["192.168.1.5"]}}
-    assert launcher.dashboard_url(snap, 8080) == "http://192.168.1.5:8080/"
-    assert launcher.dashboard_url(snap, 8080, lan=False) == "http://localhost:8080/"
-    assert launcher.dashboard_url(None, 9) == "http://localhost:9/"
+    assert launcher.operator_address(snap, 8080) == "192.168.1.5:8080"
+    assert launcher.operator_address(None, 9) == "localhost:9"
 
 
 def test_port_in_use():

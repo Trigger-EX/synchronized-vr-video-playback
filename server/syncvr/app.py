@@ -110,7 +110,7 @@ class SyncServer:
             "addresses": local_ipv4_addresses(),
         }
         self._tasks = [asyncio.create_task(self._save_loop()), asyncio.create_task(self._rescan_loop())]
-        log.info("headset port TCP %d; dashboard http://%s:%d/", self.headsets.port,
+        log.info("headset port TCP %d; operator API http://%s:%d/", self.headsets.port,
                  (local_ipv4_addresses() or ["localhost"])[0], self.config.http_port)
         log.info("content folder: %s (%d videos)", self.library.root.resolve(), len(self.library.videos))
 
