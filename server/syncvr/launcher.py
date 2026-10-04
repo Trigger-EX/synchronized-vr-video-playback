@@ -26,7 +26,6 @@ log = logging.getLogger(__name__)
 # Relative folders resolve against server/, so a double-click works from any working directory.
 BASE_DIR = Path(__file__).resolve().parent.parent
 LOG_NAME = "syncvr.log"
-REFRESH_MS = 1000
 
 
 # ---------------------------------------------------------------- pure helpers
@@ -351,7 +350,7 @@ def main(args) -> int:
         shown = False
         if qt_ok:
             try:
-                from .qt_ui import show_error
+                from .gui.app import show_error
                 show_error("SyncVR", msg)
                 shown = True
             except Exception:
@@ -365,8 +364,8 @@ def main(args) -> int:
         open_path(local_url)
     try:
         if qt_ok:
-            from .qt_ui import run_window
-            run_window(thread, config, local_url, log_path)
+            from .gui.app import run_window
+            run_window(thread, config, log_path)
         else:
             run_console(thread, local_url, log_path)
     finally:

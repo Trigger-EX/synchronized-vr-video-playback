@@ -17,7 +17,7 @@ gui = ["PySide6-Essentials>=6.5"]
 syncvr = "syncvr.__main__:main"
 
 [tool.setuptools]
-packages = ["syncvr"]
+packages = ["syncvr", "syncvr.gui"]
 
 [tool.setuptools.package-data]
 syncvr = ["web/*"]

@@ -1,3 +1,4 @@
+import os
 import struct
 from pathlib import Path
 
@@ -31,3 +32,11 @@ def content_dir(tmp_path):
     make_mp4(d / "concert_360_TB.mp4", duration=120.0)
     make_mp4(d / "trailer_flat.mp4", duration=30.0, width=1920, height=1080, mdat_bytes=300_000)
     return d
+
+
+@pytest.fixture(scope="session")
+def qapp():
+    pytest.importorskip("PySide6.QtWidgets", exc_type=ImportError)
+    os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+    from PySide6.QtWidgets import QApplication
+    return QApplication.instance() or QApplication([])
