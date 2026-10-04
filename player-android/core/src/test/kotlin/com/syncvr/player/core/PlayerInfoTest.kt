@@ -11,3 +11,12 @@ class PlayerInfoTest {
         assertEquals("native", PlayerInfo.PLAYER)
     }
 }
+
+class HelloTest {
+    @Test
+    fun helloReportsNativePlayer() {
+        val m = com.syncvr.player.core.sync.Json.parseObject(Hello.build("id", "ser", "Oculus Go", "1.0"))!!
+        assertEquals("native", m["player"])
+        assertEquals("hello", m["type"])
+    }
+}

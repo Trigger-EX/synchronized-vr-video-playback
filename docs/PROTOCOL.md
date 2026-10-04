@@ -34,7 +34,7 @@ object has a `type`. **All times are server-clock seconds** (the server's
 
 | type | fields | when |
 |---|---|---|
-| `hello` | `proto`, `device_id`, `serial`, `model`, `app_version` | first line on every connection |
+| `hello` | `proto`, `device_id`, `serial`, `model`, `app_version`, `player` (`native`, or absent for the Unity app) | first line on every connection |
 | `time_ping` | `id`, `t0` (headset clock) | ~10/s right after connecting, then every 2 s |
 | `inventory` | `files: [{name, size}]` | after connecting and whenever local files change |
 | `status` | see below | every second |

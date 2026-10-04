@@ -169,6 +169,7 @@ function cardHtml(dev) {
   parts.push(`<div class="card-head"><span class="dot ${dotClass}"></span>` +
     `<span class="name" title="${esc(dev.id)}">${esc(dev.label)}</span>` +
     (dev.group ? `<span class="chip">${esc(dev.group)}</span>` : "") +
+    (dev.player ? `<span class="chip" title="Player app">${esc(dev.player)}</span>` : "") +
     `<button class="edit" data-edit="${esc(dev.id)}" aria-label="Edit">Edit</button></div>`);
   parts.push(`<div class="line"><span class="badge ${esc(stateName)}">${esc(stateName)}</span>` +
     (st.video ? `<span class="video">${esc(st.video)}</span>` : "") + `</div>`);
@@ -481,7 +482,7 @@ function openEdit(id) {
   const dev = state.devices.find((d) => d.id === id);
   if (!dev) return;
   editingId = id;
-  $("#edit-id").textContent = `${dev.id}${dev.model ? " · " + dev.model : ""}${dev.ip ? " · " + dev.ip : ""}${dev.app_version ? " · app " + dev.app_version : ""}`;
+  $("#edit-id").textContent = `${dev.id}${dev.model ? " · " + dev.model : ""}${dev.ip ? " · " + dev.ip : ""}${dev.player ? " · " + dev.player + " player" : ""}${dev.app_version ? " · app " + dev.app_version : ""}`;
   $("#edit-name").value = dev.name;
   $("#edit-group").value = dev.group;
   $("#edit-forget").hidden = dev.online;
