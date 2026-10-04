@@ -5,7 +5,7 @@ Replace the Unity headset app with a native Oculus Go player, following docs/EXE
 (order: 1A → 3.1 → 1B → 2 → 3.2 → 4 → 5). Right now: get Checkpoint 1 (hardware check) running on a real Go.
 
 ## Decisions and constraints
-- `player-android/`: Kotlin + C++ VrApi 1.36 (Oculus Mobile SDK 19.0), package `com.syncvr.player`, activity `.MainActivity`, minSdk 25, target 34, armeabi-v7a.
+- `player-android/`: Kotlin + C++ VrApi 1.32 (Oculus Mobile SDK 15.0; Go final OS has VrApi 1.1.35 and rejects newer loaders), package `com.syncvr.player`, activity `.MainActivity`, minSdk 25, target 34, armeabi-v7a.
 - APK is built only in CI (job `player-android`, artifact `SyncVRPlayer-apk`); dl.google.com is blocked locally.
 - On the Go, VrApi's loader aborts if any `vrapi_*` query (e.g. `vrapi_GetVersionString`) runs before `vrapi_Initialize`. Only call VrApi from the render thread after `App::InitVrApi()` (cpp/app.cpp).
 - Launch by shell: `adb shell am start -n com.syncvr.player/.MainActivity` (or `python3 -m syncvr adb launch`).

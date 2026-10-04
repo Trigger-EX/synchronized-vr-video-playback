@@ -36,8 +36,8 @@ Goal: answer the risky questions about the Go before building everything on top 
 1. **Project setup.** Create `player-android/` (Gradle, Kotlin, minimum Android 7.1 / API 25,
    32-bit ARM). It has two modules: `core`, plain Kotlin for logic that is testable anywhere, and
    `app`, the Android app.
-2. **Meta SDK.** CI downloads Oculus Mobile SDK **19.0 (VrApi 1.36)**, the last version that
-   supports the Go, from a public mirror pinned to an exact commit and checksum. It is never
+2. **Meta SDK.** CI downloads Oculus Mobile SDK **15.0 (VrApi 1.32)**; the Go's final OS (VrApi
+   1.1.35) rejects newer loaders, from a public mirror pinned to an exact commit and checksum. It is never
    committed to the repo.
 3. **VR loop in C++** (`app/src/main/cpp`). Enter VR mode, run the frame loop, create an Android
    surface swapchain, and submit compositor layers: equirect (360/180, stereo via per-eye halves),

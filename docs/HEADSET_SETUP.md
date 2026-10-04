@@ -1,7 +1,7 @@
 # Headset setup (Oculus Go)
 
 The headset app is the native player in [`player-android/`](../player-android): Kotlin and C++
-on Oculus VrApi 1.36, with ExoPlayer for video. Its package name is `com.syncvr.player`, so it
+on Oculus VrApi 1.32, with ExoPlayer for video. Its package name is `com.syncvr.player`, so it
 replaces the old Unity app on a headset and uses the same video folder.
 
 **Current state:** the native player is a diagnostic build for
