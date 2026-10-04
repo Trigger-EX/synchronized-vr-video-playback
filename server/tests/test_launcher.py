@@ -111,3 +111,16 @@ def test_snapshot_async(tmp_path):
     finally:
         t.stop()
     assert t.snapshot_async() is None
+
+
+def test_server_thread_call(tmp_path):
+    t = launcher.ServerThread(make_config(tmp_path))
+    t.start()
+    try:
+        assert t.call(lambda c, a, b: (len(c.devices), a + b), 1, 2).result(5) == (0, 3)
+        with pytest.raises(ZeroDivisionError):
+            t.call(lambda c: 1 / 0).result(5)
+    finally:
+        t.stop()
+    with pytest.raises(RuntimeError):
+        t.call(lambda c: 1).result(1)

@@ -186,6 +186,22 @@ class ServerThread:
         except Exception:
             return None
 
+    def call(self, fn, *args) -> "concurrent.futures.Future":
+        """Run fn(controller, *args) on the server loop; the Future carries its result or exception."""
+        if not self.running or self.server is None or self.loop is None:
+            failed = concurrent.futures.Future()
+            failed.set_exception(RuntimeError("server is not running"))
+            return failed
+
+        async def run():
+            return fn(self.server.controller, *args)
+        try:
+            return asyncio.run_coroutine_threadsafe(run(), self.loop)
+        except RuntimeError:  # loop closed
+            failed = concurrent.futures.Future()
+            failed.set_exception(RuntimeError("server is not running"))
+            return failed
+
     def snapshot_async(self) -> Optional["concurrent.futures.Future"]:
         """Future for a controller snapshot taken on the server loop; None if not running."""
         if not self.running or self.server is None or self.loop is None:
