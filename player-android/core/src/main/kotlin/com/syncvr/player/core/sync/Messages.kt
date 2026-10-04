@@ -258,6 +258,8 @@ class JsonWriter(type: String) {
             sb.append('"')
         }
 
+        fun stringLiteral(s: String): String = StringBuilder().also { writeString(it, s) }.toString()
+
         fun stringArray(items: Iterable<String>): String {
             val sb = StringBuilder("[")
             var firstItem = true
