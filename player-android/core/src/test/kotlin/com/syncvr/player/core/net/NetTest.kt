@@ -193,4 +193,34 @@ class ServerConnectionTest {
         await { if (c.closed) true else null }
         assertNotNull(c)
     }
+
+    @Test fun sendNeverBlocksCallerEvenWhenWriteBlocks() {
+        val gate = java.util.concurrent.CountDownLatch(1)
+        val c = object : TcpConnection {
+            val inc = LinkedBlockingQueue<String>()
+            override fun readLine(): String? = inc.poll(5, TimeUnit.SECONDS) ?: throw IOException("t")
+            override fun writeLine(line: String) { if (line.contains("slow")) gate.await() }
+            override fun close() { gate.countDown(); inc.add("\u0000x") }
+        }
+        val sc = ServerConnection(fast.copy(slowPingMs = 100000, fastPingMs = 100000), "{}", FakeConnector(listOf { c }))
+        sc.start()
+        try {
+            await { if (sc.connected) true else null }
+            val done = java.util.concurrent.atomic.AtomicBoolean()
+            val t = Thread { repeat(1000) { sc.send("""{"type":"slow"}""") }; done.set(true) }
+            t.start()
+            await(2000) { if (done.get()) true else null }
+        } finally { sc.stop() }
+    }
+
+    @Test fun sendIsWrittenByWriterThread() {
+        val c = FakeConn()
+        val sc = ServerConnection(fast.copy(slowPingMs = 100000, fastPingMs = 100000), "{}", FakeConnector(listOf { c }))
+        sc.start()
+        try {
+            await { if (sc.connected) true else null }
+            sc.send("""{"type":"status"}""")
+            await { if (c.sent.contains("""{"type":"status"}""")) true else null }
+        } finally { sc.stop() }
+    }
 }

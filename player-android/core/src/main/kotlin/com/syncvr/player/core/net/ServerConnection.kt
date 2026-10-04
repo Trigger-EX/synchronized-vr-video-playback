@@ -6,6 +6,7 @@ import com.syncvr.player.core.sync.LocalClock
 import com.syncvr.player.core.sync.ServerMessage
 import java.io.IOException
 import java.util.concurrent.ConcurrentLinkedQueue
+import java.util.concurrent.LinkedBlockingQueue
 import java.util.concurrent.atomic.AtomicLong
 
 data class ConnectionConfig(
@@ -53,6 +54,8 @@ class ServerConnection(
     private val pingId = AtomicLong()
     private var netThread: Thread? = null
     private var pingThread: Thread? = null
+    private var writerThread: Thread? = null
+    private val outbox = LinkedBlockingQueue<String>(OUTBOX_CAPACITY)
 
     @Synchronized
     fun start() {
@@ -60,6 +63,7 @@ class ServerConnection(
         running = true
         netThread = Thread(::run, "SyncVR network").apply { isDaemon = true; start() }
         pingThread = Thread(::pingLoop, "SyncVR clock").apply { isDaemon = true; start() }
+        writerThread = Thread(::writeLoop, "SyncVR writer").apply { isDaemon = true; start() }
     }
 
     @Synchronized
@@ -68,15 +72,32 @@ class ServerConnection(
         closeConn()
         netThread?.interrupt()
         pingThread?.interrupt()
+        writerThread?.interrupt()
+        outbox.clear()
     }
 
-    /** Queue a line for the server. Safe from any thread; dropped when offline. */
+    /**
+     * Queue a line for the server. Never blocks and never touches the socket, so it is safe from any
+     * thread (including Android's main thread). Dropped when offline; when the bounded queue is full
+     * the oldest line is dropped. A dedicated writer thread sends queued lines in order.
+     */
     fun send(json: String) {
-        val c = conn ?: return
+        if (conn == null) return
+        while (!outbox.offer(json)) outbox.poll()
+    }
+
+    private fun writeLoop() {
         try {
-            c.writeLine(json)
-        } catch (e: IOException) {
-            closeConn()
+            while (running) {
+                val line = outbox.take()
+                val c = conn ?: continue
+                try {
+                    c.writeLine(line)
+                } catch (e: IOException) {
+                    closeConn()
+                }
+            }
+        } catch (_: InterruptedException) {
         }
     }
 
@@ -89,6 +110,7 @@ class ServerConnection(
     private fun closeConn() {
         val c = conn
         conn = null
+        outbox.clear()
         c?.close()
     }
 
@@ -143,6 +165,7 @@ class ServerConnection(
         c.writeLine(helloJson)
         serverHost = host
         resyncClock()
+        outbox.clear()
         conn = c
         connected = true
         status = "Connected to $host"
@@ -176,3 +199,5 @@ class ServerConnection(
 
     private fun sleep(ms: Long) = Thread.sleep(ms)
 }
+
+private const val OUTBOX_CAPACITY = 256
