@@ -6,8 +6,6 @@ object NativeBridge {
         System.loadLibrary("syncvr_native")
     }
 
-    @JvmStatic external fun vrApiVersion(): String
-
     /** Starts the render thread; returns 0 on failure. Native calls MainActivity.onNativeSurfacesReady. */
     @JvmStatic external fun nativeCreate(activity: MainActivity): Long
 
@@ -26,6 +24,12 @@ object NativeBridge {
     @JvmStatic external fun nativeSetMode(handle: Long, mode: Int)
 
     @JvmStatic external fun nativeSetVideoAspect(handle: Long, aspect: Float)
+
+    /** Operator recenter: the current head direction becomes the front. */
+    @JvmStatic external fun nativeRecenter(handle: Long)
+
+    /** Larger, centred panel while an operator message or identify banner is up. */
+    @JvmStatic external fun nativeSetPanelProminent(handle: Long, prominent: Boolean)
 
     @JvmStatic external fun nativeGetStatus(handle: Long): String
 }

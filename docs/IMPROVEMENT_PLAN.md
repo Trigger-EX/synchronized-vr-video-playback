@@ -22,8 +22,8 @@ implementation against better alternatives and proposes a plan. **Nothing here i
 ## 1. Headset engine and runtime
 
 The Go runs Android 7.1 on a Snapdragon 821 and only supports Oculus's legacy **VrApi**, not
-OpenXR. The last Mobile SDK that supports it is **19.0 (VrApi 1.36)**; Go support was removed in
-SDK 20.0.
+OpenXR. Its final OS ships VrApi 1.1.35 and refuses newer loaders with "Oculus Update Required",
+so the player builds against Mobile SDK **15.0 (VrApi 1.32)**, the newest release at or below that.
 
 | Option | Verdict |
 |---|---|
@@ -147,7 +147,7 @@ without factory-level provisioning. These features get as close as the platform 
 **Native app:** a Gradle project, built in GitHub Actions on every push. Each commit gets a
 ready-to-install `SyncVRPlayer.apk` as a download, so no one has to install Unity.
 
-The Mobile SDK 19.0 headers and loader library are under Meta's SDK licence. They will be
+The Mobile SDK 15.0 headers and loader library are under Meta's SDK licence. They will be
 downloaded at build time (from Meta, or a public mirror of that exact version) rather than
 committed to the repo.
 
@@ -165,7 +165,7 @@ each. Optional conveniences:
 | Phase | What | Result / acceptance |
 |---|---|---|
 | **0. Baseline** (you) | Test the current Unity build on 2–3 Go headsets using the checklist in `HEADSET_SETUP.md`. Record drift, temperature and fps over a full-length video. | Server, network and sync design confirmed on hardware; numbers to beat. |
-| **1. Native player** | New `player-android/` Gradle project: Kotlin app, C++ VrApi loop (SDK 19.0), ExoPlayer into surface-swapchain equirect/cylinder layers, Canvas overlay layer, Kotlin port of the sync engine with the shared scenario tests, same protocol. CI builds the APK. | Passes the same checklist as the Unity app; side-by-side comparison of sharpness, temperature and drift. |
+| **1. Native player** | New `player-android/` Gradle project: Kotlin app, C++ VrApi loop (SDK 15.0), ExoPlayer into surface-swapchain equirect/cylinder layers, Canvas overlay layer, Kotlin port of the sync engine with the shared scenario tests, same protocol. CI builds the APK. | Passes the same checklist as the Unity app; side-by-side comparison of sharpness, temperature and drift. |
 | **2. Sync polish** | Frame-release metrics, pitch-corrected rate as the default, exact seeks, retuned defaults from phase 1 measurements. Raw MediaCodec/AudioTrack scheduling only if the numbers call for it. | Drift under one display frame (about 14 ms) across a room of headsets, with no audible corrections. |
 | **3. Content pipeline** | `ffprobe` checks, "Optimize for Go" re-encoding, checksums, bulk USB copy from the dashboard. | Any file you drop in either plays well or tells you why it won't. |
 | **4. Fleet operations** | Start on boot, OTA updates, 60/72 Hz and brightness from the dashboard, charging overview, Raspberry Pi guide. | Headset powers on into SyncVR; updates without cables. |

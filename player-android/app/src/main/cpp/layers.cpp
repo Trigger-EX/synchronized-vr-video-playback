@@ -46,8 +46,15 @@ ScreenPlacement VideoScreenPlacement(float aspect) {
     return p;
 }
 
-ScreenPlacement PanelPlacement() {
+ScreenPlacement PanelPlacement(bool prominent) {
     ScreenPlacement p;
+    if (prominent) {
+        p.radiusM = 3.0f;
+        p.widthM = 2.4f;
+        p.heightM = 0.6f;
+        p.centerYM = 0.1f;
+        return p;
+    }
     p.radiusM = 3.0f;
     p.widthM = 1.2f;
     p.heightM = 0.3f;
@@ -55,19 +62,37 @@ ScreenPlacement PanelPlacement() {
     return p;
 }
 
+float HeadYaw(const ovrTracking2& tracking) {
+    const ovrQuatf& q = tracking.HeadPose.Pose.Orientation;
+    // Forward is -Z rotated by q; yaw is the rotation about +Y that maps -Z onto it.
+    return atan2f(2.0f * (q.x * q.z + q.w * q.y), 1.0f - 2.0f * (q.x * q.x + q.y * q.y));
+}
+
+ovrTracking2 RecenteredTracking(const ovrTracking2& tracking, float yaw) {
+    // UNVERIFIED: sign of the yaw (recenter not yet tested on hardware). Content direction d' = R(-yaw) * d, so the view becomes V * R(yaw).
+    ovrTracking2 out = tracking;
+    const ovrMatrix4f rot = ovrMatrix4f_CreateRotation(0.0f, yaw, 0.0f);
+    for (int eye = 0; eye < VRAPI_FRAME_LAYER_EYE_MAX; eye++) {
+        out.Eye[eye].ViewMatrix = ovrMatrix4f_Multiply(&tracking.Eye[eye].ViewMatrix, &rot);
+    }
+    return out;
+}
+
 ovrLayerEquirect2 MakeEquirectLayer(
-    const ovrTracking2& tracking, ovrTextureSwapChain* chain, bool stereoTopBottom) {
+    const ovrTracking2& tracking, ovrTextureSwapChain* chain, bool stereoTopBottom, float yaw) {
     ovrLayerEquirect2 layer = vrapi_DefaultLayerEquirect2();
     layer.HeadPose = tracking.HeadPose;
-    const ovrMatrix4f headView = vrapi_GetViewMatrixFromPose(&tracking.HeadPose.Pose);
+    const ovrMatrix4f plainView = vrapi_GetViewMatrixFromPose(&tracking.HeadPose.Pose);
+    const ovrMatrix4f rot = ovrMatrix4f_CreateRotation(0.0f, yaw, 0.0f);
+    const ovrMatrix4f headView = ovrMatrix4f_Multiply(&plainView, &rot);
     layer.TexCoordsFromTanAngles = WorldFixedTexCoords(headView);
     for (int eye = 0; eye < VRAPI_FRAME_LAYER_EYE_MAX; eye++) {
         layer.Textures[eye].ColorSwapChain = chain;
         layer.Textures[eye].SwapChainIndex = 0;
         if (stereoTopBottom) {
-            // HW CHECK: assumes texture v = 1 is the top row of the video (OpenGL convention,
-            // as delivered by a SurfaceTexture), so "top half" is v in [0.5, 1]. Left eye = top,
-            // right eye = bottom. If the halves come out swapped or upside down, flip here.
+            // UNVERIFIED: eye order. Assumes texture v = 1 is the top row (OpenGL convention),
+            // so left eye = top half, right eye = bottom half. Hardware showed each eye gets one
+            // half of a mono frame, but this was not checked with a real top/bottom 3D video.
             if (eye == VRAPI_FRAME_LAYER_EYE_LEFT) {
                 layer.Textures[eye].TextureRect = {0.0f, 0.5f, 1.0f, 0.5f};
                 SetTextureMatrix(&layer.Textures[eye].TextureMatrix, 1.0f, 0.5f, 0.0f, 0.5f);
@@ -94,11 +119,12 @@ ovrLayerCylinder2 MakeCylinderLayer(
         layer.Header.DstBlend = VRAPI_FRAME_LAYER_BLEND_ZERO;
     }
 
-    // HW CHECK: the header only says the cylinder is "as if CUBE" with a fixed 180 x 60 degree
+    // Verified on Go (Checkpoint 1): this gives a flat screen in front of the viewer.
+    // The header only says the cylinder is "as if CUBE" with a fixed 180 x 60 degree
     // direction-to-hemicylinder mapping. We therefore feed it the world-fixed view rotation (same
     // as for cube maps) and select the wanted rectangle with TextureMatrix, centred straight
     // ahead (-Z of the tracking space). Distance is not a parameter of this mapping, so the
-    // nominal 3 m only determines the angular size. Vertical v is assumed to grow upward.
+    // nominal 3 m only determines the angular size. Vertical v grows upward.
     const float halfArc = 0.5f * placement.widthM / placement.radiusM;  // radians
     const float du = 2.0f * halfArc / kPi;
     const float u0 = 0.5f - halfArc / kPi;

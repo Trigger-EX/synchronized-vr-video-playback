@@ -76,6 +76,28 @@ async def test_headsets_register_and_report(server, fleet):
         assert abs(h.sync.offset - true_offset) < 0.005
 
 
+async def test_hello_reports_player_app(server, fleet):
+    headsets = await fleet(1)
+    dev = server.controller.devices[headsets[0].device_id]
+    assert dev.player == "sim"
+    # A native-player hello, and an old Unity one that has no "player" field.
+    for hello, expected in (({"player": "native"}, "native"), ({}, "unity")):
+        base = {"device_id": "x1", "model": "Oculus Go", "app_version": "1", "serial": "s"}
+
+        class Conn:
+            remote_ip, http_port = "127.0.0.1", 0
+            def send(self, *_): pass
+            def close(self): pass
+
+        server.controller.headset_connected({**base, **hello}, Conn())
+        assert server.controller.devices["x1"].player == expected
+        assert server.controller.devices["x1"].to_json()["player"] == expected
+        async with aiohttp.ClientSession() as s:
+            async with s.get(f"http://127.0.0.1:{server.http_port}/api/state") as r:
+                state = await r.json()
+        assert {d["id"]: d["player"] for d in state["devices"]}["x1"] == expected
+
+
 async def test_synchronized_play_pause_seek(server, fleet):
     headsets = await fleet(6)
     await api(server, "play", video="concert_360_TB.mp4")

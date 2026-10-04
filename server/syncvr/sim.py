@@ -283,7 +283,7 @@ class SimHeadset:
         self.host = host
         self.sync.reset()
         self.send({"type": "hello", "proto": PROTOCOL_VERSION, "device_id": self.device_id,
-                   "model": "Simulator", "app_version": __version__, "serial": self.device_id})
+                   "model": "Simulator", "app_version": __version__, "player": "sim", "serial": self.device_id})
         self.send({"type": "inventory", "files": self.inventory()})
         tasks = [asyncio.create_task(t) for t in (self._pinger(), self._ticker(), self._reporter())]
         try:

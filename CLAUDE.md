@@ -27,15 +27,10 @@ Workflows
 - In every workflow, name a model for each stage: haiku for discovery, searches, and build or test runs; sonnet for implementation; opus only for design decisions or a final review. Use lower effort for routine stages where the workflow allows it.
 - Keep each workflow as small as the task allows. When starting one, state its stages and roughly how many agents it will use in one line.
 
-Ending: run the cp skill when any of these happen:
-- the current task is done (PR opened, or work committed and pushed)
-- I ask for something unrelated to the current task
-- the conversation has been auto-compacted
-- a step in docs/plan.md is done and the next step can stand alone
+Ending: run the cp skill only when I type cp, checkpoint, handoff or wrap up, or when a hook message tells you to. Never checkpoint on your own otherwise, even when a task is finished.
 
-Splitting
-- If I send several unrelated tasks at once, do only the first. List the rest as ready-to-run commands, one per task, each understandable with no prior context:
-  claude --cloud "<task>"
+Multiple tasks
+- When I send several tasks in one message, do all of them in this session, in the order given. Don't move any to other sessions unless I ask.
 
 Before a PR is marked ready for review, delete docs/handoff.md and docs/plan.md in a final commit.
 
