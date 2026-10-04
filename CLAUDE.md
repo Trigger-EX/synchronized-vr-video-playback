@@ -2,7 +2,6 @@
 
 Synchronized video playback for Oculus Go fleets: Python server + dashboard (`server/`),
 native Kotlin/C++ Go player (`player-android/`), docs in `docs/` (start with `docs/EXECUTION_PLAN.md`).
-The old Unity project in `headset/` is legacy and being retired; don't build, test or extend it.
 
 ## Session hygiene
 
