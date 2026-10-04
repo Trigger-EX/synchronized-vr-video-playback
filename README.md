@@ -21,7 +21,7 @@ account and no internet connection.
 | Part | Where | What it is |
 |---|---|---|
 | **Server + dashboard** | [`server/`](server/) | Python 3.8+ (one dependency: aiohttp). Runs on any laptop, mini-PC or Raspberry Pi on the headsets' network. Replaces Headjack Operator. |
-| **Headset app** | [`player-android/`](player-android/) | Native Oculus Go player (Kotlin + C++, built and signed by CI, no Unity). Replaces Headjack Link / the Cinema template. The old Unity project in [`headset/`](headset/) is legacy. |
+| **Headset app** | [`player-android/`](player-android/) | Native Oculus Go player (Kotlin + C++, built and signed by CI, no Unity). Replaces Headjack Link / the Cinema template. |
 | **Fleet tool** | `python -m syncvr adb …` | Installs the app, writes config and copies videos to many USB-connected headsets in parallel. |
 | **Simulator** | `python -m syncvr sim` | Simulated headsets that run the real sync code, for trying the dashboard and load-testing without hardware. |
 
@@ -77,8 +77,7 @@ python3 -m syncvr adb setup ../SyncVRPlayer.apk   # install, configure, launch
 python3 -m syncvr adb push ../content/*.mp4       # optional: fast USB preload
 ```
 
-The native player has run on hardware (see the status table below). The legacy Unity app is described in
-[docs/UNITY_PLAYER.md](docs/UNITY_PLAYER.md).
+The native player has run on hardware (see the status table below).
 
 ### 3. Run a show
 
@@ -97,7 +96,7 @@ The native player has run on hardware (see the status table below). The legacy U
 * Consumer routers handle ~25–30 headsets well; beyond ~60, use enterprise access points.
   Put the server machine on Ethernet.
 * If broadcast discovery is blocked, use `serve --broadcast 192.168.1.255`. A fixed server address
-  (`syncvr adb configure --server …`) is only read by the legacy Unity app, not the native player.
+  (`syncvr adb configure --server …`) is not read by the native player yet.
 * **Encoding for Oculus Go:** H.264 High profile MP4, up to 3840×1920 (360 mono) or
   3840×2160 (stereo) at 30 fps, 20–40 Mbps, AAC audio. A keyframe every 1 s
   (`-g 30` at 30 fps) makes seeks and re-syncs faster. Example:
@@ -126,9 +125,8 @@ worst headset under 20 ms once playing.
 | Component | State |
 |---|---|
 | Server, dashboard, protocol, content distribution, ADB tool | Working; 42 automated tests (`cd server && python3 -m pytest`), including end-to-end runs with simulated headsets. |
-| Sync engine | Python reference and C# port pass the same scenario tests (`headset/Tests~/EngineTests.cs`, runs under Mono). |
+| Sync engine | The Python reference engine is tested in `server/tests`, the Kotlin engine in the `player-android/core` tests, with the same scenarios. |
 | Headset app (native) | `player-android/`, built and signed by CI: server connection, sync, content, telemetry, operator commands and an end-to-end CI test against the Python server. Verified on an Oculus Go: connect, load/play/sync, recenter, worn/proximity, resume ([checks](docs/HEADSET_SETUP.md)). Stereo eye order and some edge cases remain untested. |
-| Headset app (Unity, legacy) | Never built or run on an Oculus Go; kept as a fallback until phase 5 of [docs/EXECUTION_PLAN.md](docs/EXECUTION_PLAN.md). See [docs/UNITY_PLAYER.md](docs/UNITY_PLAYER.md). |
 
 ## Roadmap
 
@@ -143,13 +141,9 @@ worst headset under 20 ms once playing.
 ```
 server/                 Python package "syncvr"
   syncvr/controller.py  fleet state, commands, content distribution
-  syncvr/sync_engine.py reference headset sync algorithm (ported to C#)
+  syncvr/sync_engine.py reference headset sync algorithm (ported to Kotlin)
   syncvr/web/           dashboard (plain HTML/CSS/JS, no build step)
   tests/                pytest suite
 player-android/         native Oculus Go player (Kotlin core + Android/C++ app)
-headset/                legacy Unity 2019.4 project
-  Assets/SyncVR/Scripts runtime: networking, sync engine, player, UI
-  Assets/SyncVR/Editor  one-click configure + build
-  Tests~/               sync engine tests runnable with Mono
 docs/                   protocol, headset setup guide (native player), improvement and execution plans
 ```

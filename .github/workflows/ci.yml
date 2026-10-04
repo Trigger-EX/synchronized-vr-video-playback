@@ -21,19 +21,6 @@ jobs:
       - run: python -m pyflakes syncvr tests
       - run: python -m pytest -q
 
-  headset-engine:
-    runs-on: ubuntu-latest
-    defaults:
-      run:
-        working-directory: headset
-    steps:
-      - uses: actions/checkout@v4
-      - run: sudo apt-get update && sudo apt-get install -y mono-mcs mono-runtime
-      - run: >
-          mcs -out:enginetests.exe "Tests~/EngineTests.cs"
-          Assets/SyncVR/Scripts/SyncEngine.cs Assets/SyncVR/Scripts/Messages.cs Assets/SyncVR/Scripts/ClockSync.cs
-      - run: mono enginetests.exe
-
   player-android:
     runs-on: ubuntu-latest
     permissions:

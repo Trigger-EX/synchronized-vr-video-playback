@@ -5,7 +5,7 @@ import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertTrue
 
-/** Same scenarios as headset/Tests~/EngineTests.cs and server/tests/test_sync_engine.py. */
+/** Same scenarios as server/tests/test_sync_engine.py. */
 class SyncEngineTest {
     private val frame = 1.0 / 72.0
 
