@@ -17,7 +17,6 @@ Branches
 - If a push to that branch is refused, push to the session branch instead and tell me in one line. Don't open a PR.
 
 Starting
-- At the start of every session, if docs/handoff.md exists on the current branch, read it first for context on the project, unless I explicitly say not to. Don't re-explore what it covers. If my first message gives no task (for example "go" or "continue"), resume from its Next step.
 - Read files selectively by path. Search before opening large files.
 
 Working
@@ -33,16 +32,13 @@ Planning
 - The planner doesn't see this conversation. Give it a self-contained brief: the goal, constraints and decisions from this conversation, and the relevant file paths.
 - Save its plan to docs/plan.md, commit it, then implement it step by step. If you hit the same error twice, or the plan turns out wrong, send the planner what happened and ask for a revised plan.
 
-Checkpoints
-- Run the cp skill only when I type cp, checkpoint, handoff or wrap up, or when a hook message tells you to. Never checkpoint, suggest a new session, or end the session on your own, even when a task is finished.
-
 Workflows
 - Only run a dynamic workflow when I ask for one (the ultracode keyword, or "use a workflow") or ultracode is on.
 - In every workflow, name a model for each stage: haiku for discovery, searches, and build or test runs; sonnet for implementation; opus only for design decisions or a final review. Use lower effort for routine stages where the workflow allows it.
 - Keep each workflow as small as the task allows. When starting one, state its stages and roughly how many agents it will use in one line.
 
 Pull requests
-- Only when I ask you to open a PR into the default branch: delete docs/handoff.md and docs/plan.md in a final commit first.
+- Only when I ask you to open a PR into the default branch: delete docs/plan.md in a final commit first.
 
 # Compact instructions
 When compacting, keep the goal, decisions made, file paths touched, failing test names and errors, and the next step. Drop exploration that led nowhere.
