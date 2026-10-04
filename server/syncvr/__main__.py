@@ -27,6 +27,9 @@ def build_parser() -> argparse.ArgumentParser:
                        help="beacon destination (repeatable), e.g. 192.168.1.255; default: auto")
     serve.add_argument("--no-discovery", action="store_true", help="do not broadcast beacons")
     serve.add_argument("--name", default="SyncVR", help="server name shown on headsets")
+    serve.add_argument("--public-host", default="", metavar="IP",
+                       help="address headsets download from (default: the address they connected to; "
+                            "set the PC's LAN IP under WSL2/Docker)")
     serve.add_argument("--password", default="", help="require this password for the dashboard/API")
     serve.add_argument("--max-downloads", type=int, default=None,
                        help="headsets downloading content at the same time (0 = unlimited, default 4)")
@@ -50,7 +53,7 @@ def main(argv=None) -> int:
                 content_dir=Path(args.content), data_dir=Path(args.data), host=args.host,
                 http_port=args.http_port, tcp_port=args.tcp_port, discovery_port=args.discovery_port,
                 broadcast=args.broadcast, discovery=not args.no_discovery, name=args.name,
-                password=args.password, max_downloads=args.max_downloads)
+                password=args.password, public_host=args.public_host, max_downloads=args.max_downloads)
             asyncio.run(serve_forever(config))
         elif args.command == "sim":
             asyncio.run(sim.run_fleet(args))

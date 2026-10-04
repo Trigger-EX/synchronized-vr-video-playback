@@ -17,9 +17,10 @@ MAX_WRITE_BUFFER = 4 * 1024 * 1024
 
 
 class HeadsetConnection:
-    def __init__(self, writer: asyncio.StreamWriter, http_port: int):
+    def __init__(self, writer: asyncio.StreamWriter, http_port: int, public_host: str = ""):
         self.writer = writer
         self.http_port = http_port
+        self.public_host = public_host
         peer = writer.get_extra_info("peername") or ("?", 0)
         local = writer.get_extra_info("sockname") or ("127.0.0.1", 0)
         self.remote_ip = peer[0]
@@ -40,8 +41,9 @@ class HeadsetConnection:
         self.writer.write(encode(msg))
 
     def content_url(self, name: str) -> str:
-        # The address the headset reached us on is by definition reachable from it.
-        host = self.local_ip
+        # Normally the address the headset reached us on; --public-host overrides it
+        # when that address is not routable from the headset (WSL2/Docker NAT, port forwards).
+        host = self.public_host or self.local_ip
         if ":" in host:
             host = f"[{host}]"
         return f"http://{host}:{self.http_port}/content/{quote(name)}"
@@ -52,11 +54,12 @@ class HeadsetConnection:
 
 
 class HeadsetServer:
-    def __init__(self, controller, host: str, port: int, http_port: int):
+    def __init__(self, controller, host: str, port: int, http_port: int, public_host: str = ""):
         self.controller = controller
         self.host = host
         self.port = port
         self.http_port = http_port
+        self.public_host = public_host
         self.server = None
 
     async def start(self) -> None:
@@ -77,7 +80,7 @@ class HeadsetServer:
         if sock is not None:
             sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
             sock.setsockopt(socket.SOL_SOCKET, socket.SO_KEEPALIVE, 1)
-        conn = HeadsetConnection(writer, self.http_port)
+        conn = HeadsetConnection(writer, self.http_port, self.public_host)
         dev = None
         try:
             hello = decode(await asyncio.wait_for(reader.readline(), HELLO_TIMEOUT_S))

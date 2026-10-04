@@ -36,6 +36,7 @@ class ServerConfig:
     broadcast: Optional[List[str]] = None
     discovery: bool = True
     name: str = "SyncVR"
+    public_host: str = ""  # address headsets use for downloads; "" = the one they connected to
     password: str = ""
     max_downloads: Optional[int] = None  # None: keep the saved value (default 4)
 
@@ -54,7 +55,8 @@ class SyncServer:
         if config.max_downloads is not None:
             self.controller.set_max_downloads(config.max_downloads)
         self.library.scan()
-        self.headsets = HeadsetServer(self.controller, config.host, config.tcp_port, config.http_port)
+        self.headsets = HeadsetServer(self.controller, config.host, config.tcp_port, config.http_port,
+                                      config.public_host)
         self.web = WebApp(self.controller, password=config.password)
         self.beacon = None
         self._runner = None
