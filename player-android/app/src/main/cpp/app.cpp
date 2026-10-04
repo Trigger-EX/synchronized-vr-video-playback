@@ -32,6 +32,9 @@ const int kPanelWidth = 576;
 const int kPanelHeight = 144;
 // Panel layer is blended with its alpha (transparent margin). Set to true to go back to opaque.
 const bool kPanelAlpha = true;
+// Chromatic aberration correction on the panel layer. Off: it was unverified and may warp the panel's
+// corners as the head turns. Set to true to restore the previous behaviour.
+const bool kPanelChromaticCorrection = false;
 const int kCpuLevel = 2;
 const int kGpuLevel = 3;
 const double kFpsLogIntervalSeconds = 5.0;
@@ -590,7 +593,7 @@ void App::RunFrame(JNIEnv* env) {
             break;
     }
 
-    panelLayer = MakeCylinderLayer(tracking, panelChain_, PanelPlacement(panelProminent_.load()), !kPanelAlpha, kPanelAlpha);
+    panelLayer = MakeCylinderLayer(tracking, panelChain_, PanelPlacement(panelProminent_.load()), !kPanelAlpha, kPanelChromaticCorrection);
     layers[layerCount++] = &panelLayer.Header;
 
     ovrSubmitFrameDescription2 frameDesc = {};
