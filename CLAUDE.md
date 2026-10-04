@@ -6,10 +6,10 @@ Unity 2019.4 headset app (`headset/`), docs in `docs/` (start with `docs/EXECUTI
 ## Session hygiene
 
 Commands
-- Build: none for the server (Python). Headset APK needs a local Unity 2019.4.41f2: `Unity -batchmode -quit -projectPath headset -executeMethod SyncVR.EditorTools.SyncVRBuild.BuildFromCommandLine -logFile build.log`
-- Test: `(cd server && python3 -m pytest -q)` and `(cd headset && mcs -out:/tmp/enginetests.exe "Tests~/EngineTests.cs" Assets/SyncVR/Scripts/SyncEngine.cs Assets/SyncVR/Scripts/Messages.cs Assets/SyncVR/Scripts/ClockSync.cs && mono /tmp/enginetests.exe)`
+- Build: `(cd player-android && ./gradlew --no-daemon :app:assembleRelease)` for the Android player; headset APK needs a local Unity 2019.4.41f2: `Unity -batchmode -quit -projectPath headset -executeMethod SyncVR.EditorTools.SyncVRBuild.BuildFromCommandLine -logFile build.log`; the Python server has no build.
+- Test: `(cd server && python3 -m pytest -q)`; `(cd player-android && ./gradlew --no-daemon :core:test)`; `(cd headset && mcs -out:/tmp/enginetests.exe "Tests~/EngineTests.cs" Assets/SyncVR/Scripts/SyncEngine.cs Assets/SyncVR/Scripts/Messages.cs Assets/SyncVR/Scripts/ClockSync.cs && mono /tmp/enginetests.exe)`
 
-One session = one task. Every message re-sends the whole conversation, so keep context small.
+Every message re-sends the whole conversation, so keep context small.
 
 Starting
 - At the start of every session, if docs/handoff.md exists on the current branch, read it first for context on the project, unless I explicitly say not to. Don't re-explore what it covers. If my first message gives no task (for example "go" or "continue"), resume from its Next step.
@@ -20,24 +20,19 @@ Working
 - When delegating to a subagent without its own model, pass one: haiku for searches, lookups and runs; sonnet for code changes; inherit only for design or architecture questions.
 - For work touching more than 3 files, write numbered steps to docs/plan.md first and commit it.
 - Keep replies short: what changed and what's next. No recaps.
-- Don't suggest switching this session's model or effort level, because that re-reads the whole conversation without the cache. If a task needs a different model or effort, suggest starting a new session instead.
+- When I send several tasks in one message, do all of them in this session, in order. Don't move any to other sessions unless I ask.
+- Don't switch this session's model or effort level, or suggest switching, unless I ask: it re-reads the whole conversation without the cache.
+
+Checkpoints
+- Run the cp skill only when I type cp, checkpoint, handoff or wrap up, or when a hook message tells you to. Never checkpoint, suggest a new session, or end the session on your own, even when a task is finished.
 
 Workflows
 - Only run a dynamic workflow when I ask for one (the ultracode keyword, or "use a workflow") or ultracode is on.
 - In every workflow, name a model for each stage: haiku for discovery, searches, and build or test runs; sonnet for implementation; opus only for design decisions or a final review. Use lower effort for routine stages where the workflow allows it.
 - Keep each workflow as small as the task allows. When starting one, state its stages and roughly how many agents it will use in one line.
 
-Ending: run the cp skill when any of these happen:
-- the current task is done (PR opened, or work committed and pushed)
-- I ask for something unrelated to the current task
-- the conversation has been auto-compacted
-- a step in docs/plan.md is done and the next step can stand alone
-
-Splitting
-- If I send several unrelated tasks at once, do only the first. List the rest as ready-to-run commands, one per task, each understandable with no prior context:
-  claude --cloud "<task>"
-
-Before a PR is marked ready for review, delete docs/handoff.md and docs/plan.md in a final commit.
+Pull requests
+- Before a PR into the default branch is marked ready for review, delete docs/handoff.md and docs/plan.md in a final commit.
 
 # Compact instructions
 When compacting, keep the goal, decisions made, file paths touched, failing test names and errors, and the next step. Drop exploration that led nowhere.
