@@ -101,6 +101,12 @@ python3 -m syncvr adb kiosk restore        # off, plus pm unhide
 python3 -m syncvr adb kiosk restore --root # also runs pm enable as root; USB only
 ```
 
+* **Wait before `adb reboot`.** Android writes the disabled packages and preferred home to
+  `package-restrictions.xml` lazily (about 10 s), so rebooting right after a change boots the
+  previous state. After a successful `on`/`off`/`restore`, the command runs `adb shell sync` and
+  waits 15 s (`PERSIST_WAIT_S`) per headset, then prints "safe to reboot". Wait for the command to
+  return before `adb reboot`. `--no-wait` skips the wait; then allow ~15 s yourself. A failed
+  command does not wait.
 * **Verification.** `on` and `off` check the result and exit non-zero on failure. `off` and
   `restore` fail if `pm list packages -d` still lists `com.oculus.vrshell` (after retrying
   `pm enable --user 0`), and if the HOME activity (`cmd package resolve-activity`) is not

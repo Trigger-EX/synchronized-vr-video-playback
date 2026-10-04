@@ -4,7 +4,7 @@ from unittest import mock
 from syncvr import adbtool
 
 
-def run_cli(argv, calls, output="ok"):
+def run_cli(argv, calls, output="ok", sleeps=None):
     p = argparse.ArgumentParser()
     adbtool.add_arguments(p)
     args = p.parse_args(["--adb", "adb"] + argv)
@@ -15,6 +15,7 @@ def run_cli(argv, calls, output="ok"):
         return mock.Mock(stdout=out, stderr="", returncode=0)
 
     with mock.patch.object(adbtool.subprocess, "run", fake_run), \
+            mock.patch.object(adbtool, "sleep", (sleeps if sleeps is not None else []).append), \
             mock.patch.object(adbtool.shutil, "which", return_value="adb"):
         return adbtool.run(args)
 
@@ -92,6 +93,7 @@ def test_kiosk_on():
         sh(BCAST_ON),
         sh(ALIAS),
         sh(RESOLVE),
+        sh("sync"),
     ]
 
 
@@ -110,6 +112,7 @@ def test_kiosk_on_root():
         ["adb", "-s", "A1", "wait-for-device"],
         sh(ALIAS),
         sh(RESOLVE),
+        sh("sync"),
     ]
 
 
@@ -172,6 +175,7 @@ def test_kiosk_off_restores_vrshell_home():
         sh("cmd package set-home-activity com.oculus.vrshell/.MainActivity"),
         sh(RESOLVE),
         sh(START_HOME),
+        sh("sync"),
     ]
 
 
@@ -208,9 +212,36 @@ def test_kiosk_restore_root_wraps_in_root():
     assert run_cli(["-s", "A1", "kiosk", "restore", "--root"], calls,
                    output=fake_device("com.oculus.vrshell/.MainActivity")) == 0
     assert calls[0] == ["adb", "-s", "A1", "root"]
-    assert calls[-2:] == [["adb", "-s", "A1", "unroot"], ["adb", "-s", "A1", "wait-for-device"]]
+    assert calls[-3:] == [["adb", "-s", "A1", "unroot"], ["adb", "-s", "A1", "wait-for-device"], sh("sync")]
 
 
 def test_kiosk_reports_errors():
     calls = []
     assert run_cli(["-s", "A1", "kiosk", "on"], calls, output="Exception occurred") == 1
+
+
+def test_kiosk_waits_after_sync_and_says_safe_to_reboot(capsys):
+    for state in ("on", "off", "restore"):
+        calls, sleeps = [], []
+        home = "com.syncvr.player/.HomeAlias" if state == "on" else "com.oculus.vrshell/.MainActivity"
+        assert run_cli(["-s", "A1", "kiosk", state], calls, output=fake_device(home), sleeps=sleeps) == 0
+        assert calls[-1] == sh("sync")
+        assert sleeps == [adbtool.PERSIST_WAIT_S]
+        text = capsys.readouterr().out
+        assert "waiting for the headset to save settings before it is safe to reboot..." in text
+        assert "safe to reboot" in text.splitlines()[-1]
+
+
+def test_kiosk_no_wait_skips_sleep(capsys):
+    calls, sleeps = [], []
+    assert run_cli(["-s", "A1", "kiosk", "off", "--no-wait"], calls,
+                   output=fake_device("com.oculus.vrshell/.MainActivity"), sleeps=sleeps) == 0
+    assert sleeps == [] and calls[-1] == sh("sync")
+    assert "waiting for the headset" not in capsys.readouterr().out
+
+
+def test_kiosk_failure_does_not_sync_or_wait(capsys):
+    calls, sleeps = [], []
+    assert run_cli(["-s", "A1", "kiosk", "on"], calls, output="Exception occurred", sleeps=sleeps) == 1
+    assert sh("sync") not in calls and sleeps == []
+    assert "safe to reboot" not in capsys.readouterr().out

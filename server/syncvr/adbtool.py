@@ -18,6 +18,7 @@ import shlex
 import shutil
 import subprocess
 import tempfile
+import time
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import List
@@ -25,6 +26,10 @@ from typing import List
 DEFAULT_PACKAGE = "com.syncvr.player"
 USB_PORTS = (8765, 8080)  # TCP control, HTTP content
 VRSHELL = "com.oculus.vrshell"  # the Oculus home environment that kiosk mode replaces
+# Android writes package-restrictions.xml (disabled packages, preferred home) lazily, ~10 s after a
+# change; rebooting sooner boots the previous state. Kiosk commands wait this long after `sync`.
+PERSIST_WAIT_S = 15
+sleep = time.sleep  # monkeypatch in tests
 
 
 class Adb:
@@ -311,8 +316,15 @@ def run(args) -> int:
                 kiosk_on(s)
             else:
                 kiosk_off(s, args.state == "restore")
+            adb.shell(s, "sync")
+            if not args.no_wait:
+                print("waiting for the headset to save settings before it is safe to reboot...", flush=True)
+                sleep(PERSIST_WAIT_S)
             return f"kiosk {args.state}"
-        return for_each(serials, kiosk)
+        failures = for_each(serials, kiosk)
+        if not failures:
+            print("safe to reboot" if not args.no_wait else "safe to reboot only after ~15 s (--no-wait)")
+        return failures
     if cmd == "reboot":
         return for_each(serials, lambda s: adb.run(s, "reboot") or "rebooting")
     if cmd == "shell":
@@ -357,6 +369,8 @@ def add_arguments(p: argparse.ArgumentParser) -> None:
     x.add_argument("state", choices=("on", "off", "restore"),
                    help="restore: off plus pm unhide (and pm enable as root with --root)")
     x.add_argument("--root", action="store_true", help="use the adb root recipe (USB only; survives more resets)")
+    x.add_argument("--no-wait", action="store_true",
+                   help=f"skip the {PERSIST_WAIT_S} s wait for Android to persist package state (do not reboot right away)")
     sub.add_parser("reboot", help="reboot the headsets")
     x = sub.add_parser("shell", help="run a shell command on every headset")
     x.add_argument("shell_command", nargs=argparse.REMAINDER)
