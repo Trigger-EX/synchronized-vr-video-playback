@@ -43,6 +43,10 @@ public:
 
     void SetMode(int mode);
     void SetVideoAspect(float aspect);
+    // Operator "recenter": the next frame's head direction becomes the front of all content.
+    void Recenter();
+    // Larger panel for operator messages.
+    void SetPanelProminent(bool prominent);
     std::string GetStatus();
 
 private:
@@ -77,6 +81,9 @@ private:
 
     std::atomic<int> mode_{0};
     std::atomic<float> videoAspect_{16.0f / 9.0f};
+    std::atomic<bool> recenterRequested_{false};
+    std::atomic<bool> panelProminent_{false};
+    float yaw_ = 0.0f;  // render thread only
 
     std::mutex statusMutex_;
     std::string status_ = "starting";

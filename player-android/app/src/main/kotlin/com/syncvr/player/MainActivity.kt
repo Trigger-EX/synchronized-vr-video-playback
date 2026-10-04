@@ -5,6 +5,8 @@ import android.os.Build
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
+import android.media.AudioManager
+import android.media.ToneGenerator
 import android.util.Log
 import android.view.Surface
 import android.view.SurfaceHolder
@@ -15,6 +17,8 @@ import com.syncvr.player.core.DisplayMode
 import com.syncvr.player.core.ModeCycle
 import com.syncvr.player.core.FrameRate
 import com.syncvr.player.core.Hello
+import com.syncvr.player.core.Overlay
+import com.syncvr.player.core.OverlayInput
 import com.syncvr.player.core.PanelText
 import com.syncvr.player.core.PlayerController
 import com.syncvr.player.core.PlayerHost
@@ -36,6 +40,8 @@ class MainActivity : Activity(), SurfaceHolder.Callback, PlayerHost {
     private val main = Handler(Looper.getMainLooper())
     private val cycle = ModeCycle()
     private val panel = PanelRenderer()
+    private val overlay = Overlay()
+    private var tone: ToneGenerator? = null
 
     private var handle = 0L
     private var player: ExoVideoPlayer? = null
@@ -125,6 +131,8 @@ class MainActivity : Activity(), SurfaceHolder.Callback, PlayerHost {
         controller = null
         player?.release()
         player = null
+        tone?.release()
+        tone = null
         panel.setSurface(null)
         videoSurface = null
         panelSurface = null
@@ -251,6 +259,34 @@ class MainActivity : Activity(), SurfaceHolder.Callback, PlayerHost {
         player?.setVolume(volume.toFloat())
     }
 
+    override fun recenter() {
+        if (handle != 0L) NativeBridge.nativeRecenter(handle)
+    }
+
+    override fun showMessage(text: String?, seconds: Double) {
+        overlay.showMessage(text, seconds, LocalClock.now)
+        redrawPanel()
+    }
+
+    override fun identify(name: String, seconds: Double) {
+        overlay.identify(name, seconds, LocalClock.now)
+        beep()
+        redrawPanel()
+    }
+
+    /** Three short pips (Overlay.beepOffsetsMs); ToneGenerator plays on the music stream. */
+    private fun beep() {
+        val gen = tone ?: try {
+            ToneGenerator(AudioManager.STREAM_MUSIC, 100).also { tone = it }
+        } catch (e: RuntimeException) {
+            Log.w(TAG, "No ToneGenerator: $e")
+            return
+        }
+        for (offset in Overlay.beepOffsetsMs()) {
+            main.postDelayed({ if (tone != null) gen.startTone(ToneGenerator.TONE_PROP_BEEP, 180) }, offset)
+        }
+    }
+
     private fun applyMode(newMode: DisplayMode) {
         mode = newMode
         Log.i(TAG, "Mode -> ${mode.label()}")
@@ -264,18 +300,30 @@ class MainActivity : Activity(), SurfaceHolder.Callback, PlayerHost {
         if (!resumed) return
         val exo = player
         val c = controller
-        val title = c?.deviceName?.takeIf { it.isNotEmpty() } ?: "SyncVR"
-        val line2 = when {
-            exo != null && exo.loadedVideo != null -> PanelText.videoLine(
-                exo.loadedVideo,
-                ((exo.time) * 1000).toLong(),
-                if (exo.length > 0) (exo.length * 1000).toLong() else -1L,
-            ) + "  [" + (c?.engine?.reportedState ?: "") + "]"
-            else -> "$title: ${connection?.status ?: "starting"}"
-        }
-        val nativeStatus = if (handle != 0L) NativeBridge.nativeGetStatus(handle) else "native not running"
-        val line3 = player?.error?.let { "Player error: $it" } ?: nativeStatus
-        panel.draw(mode.label(), line2, line3)
+        val conn = connection
+        val now = LocalClock.now
+        val videoLine = if (exo != null && exo.loadedVideo != null) PanelText.videoLine(
+            exo.loadedVideo,
+            (exo.time * 1000).toLong(),
+            if (exo.length > 0) (exo.length * 1000).toLong() else -1L,
+        ) else null
+        val content = overlay.compose(
+            now,
+            OverlayInput(
+                deviceName = c?.deviceName ?: "",
+                serverName = c?.serverName ?: "",
+                connected = conn?.connected ?: false,
+                connectionStatus = conn?.status ?: "starting",
+                state = c?.engine?.reportedState ?: "idle",
+                playerError = exo?.error,
+                receivingContent = contentHost?.manager?.progressJson() != null,
+                modeLabel = mode.label(),
+                videoLine = videoLine,
+                nativeStatus = if (handle != 0L) NativeBridge.nativeGetStatus(handle) else "native not running",
+            ),
+        )
+        if (handle != 0L) NativeBridge.nativeSetPanelProminent(handle, content.prominent)
+        panel.draw(content.line1, content.line2, content.line3)
     }
 
     private companion object {

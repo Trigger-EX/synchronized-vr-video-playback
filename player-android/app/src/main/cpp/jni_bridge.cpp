@@ -66,6 +66,16 @@ JNIEXPORT void JNICALL Java_com_syncvr_player_NativeBridge_nativeSetVideoAspect(
     if (syncvr::App* app = FromHandle(handle)) app->SetVideoAspect(static_cast<float>(aspect));
 }
 
+JNIEXPORT void JNICALL Java_com_syncvr_player_NativeBridge_nativeRecenter(JNIEnv*, jclass,
+                                                                          jlong handle) {
+    if (syncvr::App* app = FromHandle(handle)) app->Recenter();
+}
+
+JNIEXPORT void JNICALL Java_com_syncvr_player_NativeBridge_nativeSetPanelProminent(
+    JNIEnv*, jclass, jlong handle, jboolean prominent) {
+    if (syncvr::App* app = FromHandle(handle)) app->SetPanelProminent(prominent == JNI_TRUE);
+}
+
 JNIEXPORT jstring JNICALL Java_com_syncvr_player_NativeBridge_nativeGetStatus(JNIEnv* env, jclass,
                                                                               jlong handle) {
     syncvr::App* app = FromHandle(handle);

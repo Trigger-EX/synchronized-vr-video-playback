@@ -25,5 +25,11 @@ object NativeBridge {
 
     @JvmStatic external fun nativeSetVideoAspect(handle: Long, aspect: Float)
 
+    /** Operator recenter: the current head direction becomes the front. */
+    @JvmStatic external fun nativeRecenter(handle: Long)
+
+    /** Larger, centred panel while an operator message or identify banner is up. */
+    @JvmStatic external fun nativeSetPanelProminent(handle: Long, prominent: Boolean)
+
     @JvmStatic external fun nativeGetStatus(handle: Long): String
 }
