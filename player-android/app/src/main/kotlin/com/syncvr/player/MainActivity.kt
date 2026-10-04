@@ -13,13 +13,16 @@ import android.view.WindowManager
 import android.provider.Settings
 import com.syncvr.player.core.DisplayMode
 import com.syncvr.player.core.ModeCycle
+import com.syncvr.player.core.FrameRate
 import com.syncvr.player.core.Hello
 import com.syncvr.player.core.PanelText
 import com.syncvr.player.core.PlayerController
 import com.syncvr.player.core.PlayerHost
 import com.syncvr.player.core.PlayerInfo
+import com.syncvr.player.core.TelemetryCache
 import com.syncvr.player.core.net.ConnectionConfig
 import com.syncvr.player.core.net.ServerConnection
+import com.syncvr.player.core.sync.LocalClock
 import com.syncvr.player.core.sync.VideoCommand
 
 /**
@@ -39,6 +42,8 @@ class MainActivity : Activity(), SurfaceHolder.Callback, PlayerHost {
     private var contentHost: ContentHost? = null
     private var connection: ServerConnection? = null
     private var controller: PlayerController? = null
+    private var sampler: TelemetrySampler? = null
+    private var wifiLock: WifiPerformanceLock? = null
     private var resumed = false
 
     private var videoSurface: Surface? = null
@@ -86,6 +91,7 @@ class MainActivity : Activity(), SurfaceHolder.Callback, PlayerHost {
     override fun onResume() {
         super.onResume()
         resumed = true
+        sampler?.start()
         if (handle != 0L) NativeBridge.nativeResume(handle)
         // The monotonic clock stops while the headset sleeps: re-measure it, then re-cue.
         connection?.resyncClock()
@@ -100,6 +106,7 @@ class MainActivity : Activity(), SurfaceHolder.Callback, PlayerHost {
 
     override fun onPause() {
         resumed = false
+        sampler?.stop()
         main.removeCallbacks(modeTick)
         main.removeCallbacks(panelTick)
         main.removeCallbacks(loopTick)
@@ -113,6 +120,8 @@ class MainActivity : Activity(), SurfaceHolder.Callback, PlayerHost {
         main.removeCallbacksAndMessages(null)
         connection?.stop()
         connection = null
+        wifiLock?.release()
+        wifiLock = null
         controller = null
         player?.release()
         player = null
@@ -198,6 +207,10 @@ class MainActivity : Activity(), SurfaceHolder.Callback, PlayerHost {
             log = { Log.i(TAG, it) },
         )
         connection = conn
+        val telemetrySampler = TelemetrySampler(this, host.manager.store.folder)
+        sampler = telemetrySampler
+        if (resumed) telemetrySampler.start()
+        val telemetry = TelemetryCache(TELEMETRY_INTERVAL_S, { LocalClock.now }, telemetrySampler::sample)
         controller = PlayerController(
             player = exo,
             content = host.manager,
@@ -206,7 +219,11 @@ class MainActivity : Activity(), SurfaceHolder.Callback, PlayerHost {
             send = conn::send,
             connected = { conn.connected },
             host = this,
+            telemetry = telemetry::get,
+            // The render thread publishes "VR on, 72.0 fps" as its status text.
+            fps = { if (handle != 0L) FrameRate.parse(NativeBridge.nativeGetStatus(handle)) else null },
         )
+        wifiLock = WifiPerformanceLock(this).also { it.acquire() }
         conn.start()
     }
 
@@ -265,5 +282,6 @@ class MainActivity : Activity(), SurfaceHolder.Callback, PlayerHost {
         const val TAG = "SyncVR"
         const val PANEL_REFRESH_MS = 1000L
         const val LOOP_INTERVAL_MS = 16L
+        const val TELEMETRY_INTERVAL_S = 5.0
     }
 }

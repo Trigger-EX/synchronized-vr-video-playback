@@ -157,6 +157,23 @@ class PlayerControllerTest {
         assertEquals(20.0, s2["rtt_ms"] as Double, 1e-6)
     }
 
+    @Test fun statusIncludesTelemetryAndFps() {
+        val c = PlayerController(
+            player, content, clock, inbox, { sent.add(it) }, { connected }, host, { t },
+            telemetry = { Telemetry(battery = 0.4, charging = true, tempC = 30.0, storageFree = 123, wifiRssi = -60, worn = false) },
+            fps = { 72.0 },
+        )
+        c.tick()
+        val s = sentOfType("status").single()
+        assertEquals(0.4, s["battery"])
+        assertEquals(true, s["charging"])
+        assertEquals(30.0, s["temp_c"])
+        assertEquals(123.0, s["storage_free"])
+        assertEquals(-60.0, s["wifi_rssi"])
+        assertEquals(false, s["worn"])
+        assertEquals(72.0, s["fps"])
+    }
+
     @Test fun queuedEventsAreFlushed() {
         ctl.queueEvent("warn", "hello \"x\"")
         ctl.tick()
