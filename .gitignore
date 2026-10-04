@@ -12,17 +12,6 @@ dist/
 server/content/
 server/data/
 
-# Unity
-headset/[Ll]ibrary/
-headset/[Tt]emp/
-headset/[Oo]bj/
-headset/[Bb]uild/
-headset/[Bb]uilds/
-headset/[Ll]ogs/
-headset/[Uu]ser[Ss]ettings/
-headset/*.csproj
-headset/*.sln
-headset/*.apk
 *.apk
 
 # OS/editor

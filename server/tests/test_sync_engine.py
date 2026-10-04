@@ -1,6 +1,6 @@
 """Deterministic tests of the reference sync engine on a virtual clock.
 
-headset/Tests~/EngineTests.cs runs the same scenarios against the C# port.
+The Kotlin engine's tests (player-android/core) run the same scenarios.
 """
 
 import pytest

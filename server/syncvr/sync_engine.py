@@ -1,8 +1,7 @@
 """Headset-side synchronization logic (reference implementation).
 
-The Unity headset app (headset/Assets/SyncVR/Scripts/SyncEngine.cs) is a
-line-by-line port of this module; the simulator runs this one. Keep them in
-step when changing either.
+The Kotlin engine in player-android/core is a port of this module; the
+simulator runs this one. Keep them in step when changing either.
 
 Model
 -----

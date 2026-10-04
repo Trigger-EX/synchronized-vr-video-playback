@@ -163,7 +163,10 @@ rejoin, and a full-length video while watching temperature and drift on the dash
 
 **Checkpoint 4 (you):** reboot a headset (does it start SyncVR?), push an app update, switch to 60 Hz.
 
-## Phase 5: retire Unity
+## Phase 5: retire Unity (done)
+
+Done: `headset/`, its CI job and `docs/UNITY_PLAYER.md` are removed. The last Unity version is in git
+history at commit `7d85004` (the commit before the removal). Original plan:
 
 After the native player has run real shows: tag the last Unity version (`unity-player-final`),
 delete `headset/`, remove its CI job and update the docs. The Python sync engine stays as the

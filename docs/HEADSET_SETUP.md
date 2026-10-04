@@ -1,16 +1,13 @@
 # Headset setup (Oculus Go)
 
 The headset app is the native player in [`player-android/`](../player-android): Kotlin and C++
-on Oculus VrApi 1.32, with ExoPlayer for video. Its package name is `com.syncvr.player`, so it
-replaces the old Unity app on a headset and uses the same video folder.
+on Oculus VrApi 1.32, with ExoPlayer for video. Its package name is `com.syncvr.player`.
 
-**No Unity is needed.** The APK is built by CI; you only need `adb`, Python 3.8+ and this repo.
+The APK is built by CI; you only need `adb`, Python 3.8+ and this repo.
 The player discovers the server by UDP broadcast, connects, follows play/pause/seek on the shared
 clock, downloads content, reports telemetry and shows its name and connection state while idle.
 It has not yet been checked on hardware (see [Checkpoint 1](#checkpoint-1-hardware-check) and
-Checkpoint 2 in [EXECUTION_PLAN.md](EXECUTION_PLAN.md)). The old Unity app is legacy: see
-[UNITY_PLAYER.md](UNITY_PLAYER.md). Both use the package `com.syncvr.player`, so installing one
-replaces the other.
+Checkpoint 2 in [EXECUTION_PLAN.md](EXECUTION_PLAN.md)).
 
 **Quick path:** download the APK (below), then with headsets on USB, from `server/`:
 
@@ -77,8 +74,7 @@ Other commands: `install`, `configure`, `launch`, `stop`, `prox-off`, `prox-on`,
 * **Fixed server address.** `python3 -m syncvr adb configure --server 192.168.1.10` (or
   `--server-name "Room A"`, or `setup --server ...`) writes `config.json` into the app's files folder.
   The native player does **not** read this file yet: it always uses UDP broadcast discovery, so
-  broadcast must reach the headsets (no client isolation; `serve --broadcast` for other subnets). The
-  file only applies to the legacy Unity app.
+  broadcast must reach the headsets (no client isolation; `serve --broadcast` for other subnets).
 * **USB mode (no firewall rules).** `python3 -m syncvr adb launch --usb` (or `setup APK --usb`)
   runs `adb reverse tcp:8765 tcp:8765` and `tcp:8080 tcp:8080` on each headset, then starts the app
   with `--es server 127.0.0.1`, so the headset reaches the server through the USB cable and no
