@@ -348,6 +348,8 @@ async def test_headsets_verify_checksums(server, fleet):
 
 
 async def test_content_served_on_tcp_port(server):
+    # The checksum header only exists once the background analyzer has hashed the file.
+    await asyncio.get_running_loop().run_in_executor(None, server.analyzer.wait, 20)
     name = "trailer_flat.mp4"
     src = (server.library.root / name).read_bytes()
     base = f"http://127.0.0.1:{server.tcp_port}/content/{name}"
