@@ -19,7 +19,7 @@ import com.syncvr.player.core.sync.VideoPlayer
 import java.io.File
 
 /**
- * [VideoPlayer] on top of Media3 ExoPlayer (MediaCodec), the counterpart of UnityVideoBackend.cs.
+ * [VideoPlayer] on top of Media3 ExoPlayer (MediaCodec).
  *
  * - Seeks are exact (SeekParameters.EXACT), not snapped to the previous keyframe.
  * - Speed changes keep the pitch (PlaybackParameters pitch stays 1.0; ExoPlayer time-stretches audio).

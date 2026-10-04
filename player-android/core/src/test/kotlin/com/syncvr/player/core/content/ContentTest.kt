@@ -52,6 +52,23 @@ private class BlockingHttp : HttpFetcher {
     }
 }
 
+private class FlakyHttp(val data: ByteArray, val failures: Int, val status: Int = 0) : HttpFetcher {
+    var calls = 0
+    override fun get(url: String, rangeStart: Long): HttpResponse {
+        calls++
+        if (calls <= failures) {
+            if (status != 0) return resp(status, ByteArray(0))
+            throw java.io.IOException("connection refused")
+        }
+        return resp(200, data)
+    }
+    private fun resp(code: Int, b: ByteArray) = object : HttpResponse {
+        override val status = code
+        override val body = ByteArrayInputStream(b)
+        override fun close() {}
+    }
+}
+
 class ContentTest {
     private val dir: File = Files.createTempDirectory("syncvr").toFile()
     private val bytes = ByteArray(1000) { (it * 7).toByte() }
@@ -202,5 +219,59 @@ class ContentTest {
         assertTrue(mgr.outbox.toList().any { it.contains("downloads_finished") && it.contains("\"cancelled\":true") })
         assertTrue(File(dir, "a.mp4.part").isFile)
         mgr.handle(ServerMessage(type = "cancel_downloads"))
+    }
+
+    private fun awaitFinished(mgr: ContentManager): String {
+        val deadline = System.currentTimeMillis() + 5000
+        while (mgr.outbox.none { it.contains("downloads_finished") } && System.currentTimeMillis() < deadline) Thread.sleep(10)
+        return mgr.outbox.first { it.contains("downloads_finished") }
+    }
+
+    @Test fun retriesNetworkFailuresWithBackoffAndEchoesJob() {
+        val http = FlakyHttp(bytes, failures = 2)
+        val delays = ArrayList<Long>()
+        val mgr = ContentManager(ContentStore(dir, http), sleep = { ms, _ -> delays.add(ms) })
+        mgr.handle(ServerMessage.parse("""{"type":"sync_content","job":"j1","files":[{"name":"a.mp4","size":1000,"url":"http://x/a"}]}""")!!)
+        assertEquals("""{"type":"downloads_finished","ok":["a.mp4"],"failed":[],"cancelled":false,"job":"j1"}""", awaitFinished(mgr))
+        assertEquals(listOf(5000L, 15000L), delays)
+        assertEquals(3, http.calls)
+    }
+
+    @Test fun doesNotRetryClientErrorsOrChecksumMismatch() {
+        val delays = ArrayList<Long>()
+        val notFound = ContentManager(ContentStore(dir, FlakyHttp(bytes, failures = 99, status = 404)), sleep = { ms, _ -> delays.add(ms) })
+        notFound.handle(ServerMessage(type = "sync_content", files = listOf(file())))
+        assertEquals("""{"type":"downloads_finished","ok":[],"failed":["a.mp4"],"cancelled":false}""", awaitFinished(notFound))
+
+        val bad = ContentManager(ContentStore(dir, FakeHttp(mapOf("http://x/a" to bytes))), sleep = { ms, _ -> delays.add(ms) })
+        bad.handle(ServerMessage(type = "sync_content", files = listOf(file("0".repeat(64)))))
+        assertTrue(awaitFinished(bad).contains("\"failed\":[\"a.mp4\"]"))
+        assertEquals(emptyList(), delays)
+
+        val r = ContentStore(dir, FlakyHttp(bytes, failures = 99, status = 503)).sync(listOf(file()), false, null)
+        assertTrue(r.retryable)
+    }
+
+    @Test fun cancelDuringBackoffEndsJobAndKeepsProgressShown() {
+        val http = FlakyHttp(bytes, failures = 99)
+        val sleeping = java.util.concurrent.CountDownLatch(1)
+        val mgr = ContentManager(ContentStore(dir, http))
+        mgr.handle(ServerMessage(type = "sync_content", job = "7", files = listOf(file())))
+        val deadline = System.currentTimeMillis() + 2000
+        while (mgr.progressJson() == null && System.currentTimeMillis() < deadline) Thread.sleep(10)
+        Thread.sleep(200) // now in the 5 s wait
+        assertTrue(mgr.progressJson() != null && mgr.jobJson() == "7")
+        sleeping.countDown()
+        mgr.handle(ServerMessage(type = "cancel_downloads"))
+        assertTrue(awaitFinished(mgr).contains("\"cancelled\":true"))
+        assertEquals(null, mgr.progressJson())
+    }
+
+    @Test fun hashingExistingFileReportsProgress() {
+        File(dir, "a.mp4").writeBytes(bytes)
+        val seen = ArrayList<Long>()
+        val r = ContentStore(dir, FakeHttp(emptyMap())).sync(listOf(file(sha(bytes))), false, null) { _, got, _ -> seen.add(got) }
+        assertEquals(listOf("a.mp4"), r.ok)
+        assertEquals(1000L, seen.last())
     }
 }

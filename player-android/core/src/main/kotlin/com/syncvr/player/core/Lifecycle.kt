@@ -9,8 +9,8 @@ interface CalibrationStore {
 }
 
 /**
- * Persists what the sync engine learns (start latency, seek time) between runs. Same keys as the
- * Unity app's PlayerPrefs. Values outside the sane range are ignored on load.
+ * Persists what the sync engine learns (start latency, seek time) between runs. Stored in a
+ * [CalibrationStore] (SharedPreferences on the headset). Values outside the sane range are ignored on load.
  */
 class CalibrationPersistence(
     private val engine: SyncEngine,

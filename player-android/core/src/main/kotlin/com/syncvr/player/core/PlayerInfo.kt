@@ -6,6 +6,6 @@ object PlayerInfo {
     const val PLAYER = "native"
     const val PACKAGE = "com.syncvr.player"
 
-    /** Videos live in the app's external files dir, the same folder the Unity app used. */
+    /** Videos live in the app's external files dir, the folder `adb push` targets. */
     const val VIDEO_DIR = "/sdcard/Android/data/$PACKAGE/files/videos/"
 }

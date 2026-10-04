@@ -123,6 +123,7 @@ class PlayerController(
             .field("fps", fps())
             .raw("download", content.progressJson())
             .field("error", if (engine.state == "error") player.error else null)
+        content.jobJson()?.let { w.raw("job", it) }
         return w.toString()
     }
 }

@@ -8,8 +8,8 @@ import com.syncvr.player.core.content.ContentStore
 import java.io.File
 
 /**
- * Android wiring for content management: the same `<external files dir>/videos` folder as the
- * Unity app. PlayerController feeds it server messages and flushes its outbox.
+ * Android wiring for content management: the `<external files dir>/videos` folder.
+ * PlayerController feeds it server messages and flushes its outbox.
  */
 class ContentHost(
     context: Context,

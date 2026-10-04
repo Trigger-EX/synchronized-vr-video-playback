@@ -9,12 +9,29 @@ data class InventoryEntry(val name: String, val size: Long)
 
 class DownloadCancelled : IOException("cancelled")
 
-data class SyncResult(val ok: List<String>, val failed: List<String>)
+/** A download failure; [retryable] says whether trying again later could help. */
+open class ContentFailure(message: String, val retryable: Boolean) : IOException(message)
+
+/** The server answered with an unexpected HTTP status; 4xx will not get better by waiting. */
+class HttpStatusFailure(val status: Int) : ContentFailure("HTTP $status", status !in 400..499)
+
+/** The downloaded file does not match its SHA-256, even after a second download. */
+class ChecksumMismatch(name: String) : ContentFailure("checksum mismatch for $name", false)
 
 /**
- * The on-device video folder (same as the Unity app: `<external files dir>/videos`, see
- * PlayerInfo.VIDEO_DIR) so `adb push` keeps working. Port of the file logic in ContentManager.cs,
- * plus SHA-256 verification (docs/PROTOCOL.md).
+ * [retryable] is true when at least one failure is worth retrying later (not a 4xx, a bad name or
+ * a checksum mismatch); [retryNames] lists those files.
+ */
+data class SyncResult(
+    val ok: List<String>,
+    val failed: List<String>,
+    val retryable: Boolean = false,
+    val retryNames: List<String> = emptyList(),
+)
+
+/**
+ * The on-device video folder (`<external files dir>/videos`, see PlayerInfo.VIDEO_DIR) so
+ * `adb push` keeps working, plus SHA-256 verification (docs/PROTOCOL.md).
  */
 class ContentStore(
     val folder: File,
@@ -94,6 +111,7 @@ class ContentStore(
         }
         val ok = ArrayList<String>()
         val failed = ArrayList<String>()
+        val retryNames = ArrayList<String>()
         for (f in files) {
             if (cancelled()) break
             val name = f.name
@@ -109,30 +127,31 @@ class ContentStore(
             } catch (e: IOException) {
                 log("download of $name failed: ${e.message}")
                 failed.add(name)
+                if ((e as? ContentFailure)?.retryable != false) retryNames.add(name)
             }
         }
-        return SyncResult(ok, failed)
+        return SyncResult(ok, failed, retryNames.isNotEmpty(), retryNames)
     }
 
     private fun ensure(f: ContentFile, name: String, cancelled: () -> Boolean, progress: (String, Long, Long) -> Unit) {
         val dest = File(folder, name)
         val sha = f.sha256?.lowercase()?.takeIf { it.isNotEmpty() }
         if (dest.isFile && dest.length() == f.size) {
-            if (sha == null || sha256Of(dest) == sha) return
+            if (sha == null || sha256Of(dest, cancelled) { progress(name, it, f.size) } == sha) return
             log("$name has the wrong checksum, downloading again")
             tryDelete(dest)
         }
         for (attempt in 1..2) {
             download(f, name, dest, cancelled, progress)
-            if (sha == null || sha256Of(dest) == sha) return
+            if (sha == null || sha256Of(dest, cancelled) == sha) return
             tryDelete(dest)
             tryDelete(File(folder, name + PART))
         }
-        throw IOException("checksum mismatch")
+        throw ChecksumMismatch(name)
     }
 
     private fun download(f: ContentFile, name: String, dest: File, cancelled: () -> Boolean, progress: (String, Long, Long) -> Unit) {
-        val url = f.url ?: throw IOException("no url")
+        val url = f.url ?: throw ContentFailure("no url", false)
         val part = File(folder, name + PART)
         var have = if (part.isFile) part.length() else 0L
         if (have > f.size) {
@@ -147,7 +166,7 @@ class ContentStore(
                 val partial = resp.status == 206
                 if (resp.status != 200 && !partial) {
                     if (resp.status == 416) tryDelete(part)
-                    throw IOException("HTTP ${resp.status}")
+                    throw HttpStatusFailure(resp.status)
                 }
                 if (!partial) have = 0
                 resp.body.use { input ->
@@ -189,14 +208,19 @@ class ContentStore(
             !name.isNullOrEmpty() && name.length <= 200 && !name.startsWith(".") &&
                 name.none { it == '/' || it == '\\' || it == '\u0000' } && !name.endsWith(PART)
 
-        fun sha256Of(file: File): String {
+        /** [onBytes] gets the bytes hashed so far; [cancelled] aborts with [DownloadCancelled]. */
+        fun sha256Of(file: File, cancelled: () -> Boolean = { false }, onBytes: (Long) -> Unit = {}): String {
             val md = MessageDigest.getInstance("SHA-256")
             file.inputStream().use { s ->
                 val buf = ByteArray(256 * 1024)
+                var done = 0L
                 while (true) {
+                    if (cancelled()) throw DownloadCancelled()
                     val n = s.read(buf)
                     if (n < 0) break
                     md.update(buf, 0, n)
+                    done += n
+                    onBytes(done)
                 }
             }
             return md.digest().joinToString("") { "%02x".format(it) }

@@ -112,6 +112,8 @@ data class ServerMessage(
     val files: List<ContentFile> = emptyList(),
     val deleteOthers: Boolean = false,
     val names: List<String> = emptyList(),
+    /** `sync_content` job id as a JSON literal (string or integer), echoed back; null when absent. */
+    val job: String? = null,
 ) {
     companion object {
         /** Parses one line from the server. Returns null for malformed JSON or a missing `type`. */
@@ -148,6 +150,11 @@ data class ServerMessage(
                 },
                 deleteOthers = o.bool("delete_others"),
                 names = o.list("names").filterIsInstance<String>(),
+                job = when (val j = o["job"]) {
+                    is String -> JsonWriter.stringLiteral(j)
+                    is Double -> if (j == Math.rint(j) && Math.abs(j) < 1e15) j.toLong().toString() else null
+                    else -> null
+                },
             )
         }
     }

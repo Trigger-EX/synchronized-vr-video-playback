@@ -3,8 +3,7 @@ package com.syncvr.player.core
 import com.syncvr.player.core.sync.JsonWriter
 
 /**
- * Headset telemetry reported in `status` (docs/PROTOCOL.md; same fields and units as
- * DeviceInfo.cs / SyncVRApp.StatusJson in the Unity app).
+ * Headset telemetry reported in `status` (fields and units are in docs/PROTOCOL.md).
  */
 data class Telemetry(
     /** 0 to 1, -1 when unknown. */
