@@ -1,5 +1,6 @@
 package com.syncvr.player.core.operator
 
+import java.util.concurrent.atomic.AtomicBoolean
 import kotlin.math.max
 import kotlin.math.min
 
@@ -59,8 +60,19 @@ class OperatorViewModel(
 
     private val lock = Any()
 
-    /** Fetches /api/state once. Safe to call every second. */
-    fun refresh() = runner { refreshNow() }
+    private val refreshing = AtomicBoolean(false)
+
+    /** Fetches /api/state once. Safe to call every second: a refresh is skipped while one is still running. */
+    fun refresh() {
+        if (!refreshing.compareAndSet(false, true)) return
+        runner {
+            try {
+                refreshNow()
+            } finally {
+                refreshing.set(false)
+            }
+        }
+    }
 
     internal fun refreshNow() {
         try {
