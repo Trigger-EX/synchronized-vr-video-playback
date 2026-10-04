@@ -77,7 +77,7 @@ python3 -m syncvr adb setup ../SyncVRPlayer.apk   # install, configure, launch
 python3 -m syncvr adb push ../content/*.mp4       # optional: fast USB preload
 ```
 
-The native player is untested on hardware so far. The legacy Unity app is described in
+The native player has run on hardware (see the status table below). The legacy Unity app is described in
 [docs/UNITY_PLAYER.md](docs/UNITY_PLAYER.md).
 
 ### 3. Run a show
@@ -127,7 +127,7 @@ worst headset under 20 ms once playing.
 |---|---|
 | Server, dashboard, protocol, content distribution, ADB tool | Working; 42 automated tests (`cd server && python3 -m pytest`), including end-to-end runs with simulated headsets. |
 | Sync engine | Python reference and C# port pass the same scenario tests (`headset/Tests~/EngineTests.cs`, runs under Mono). |
-| Headset app (native) | `player-android/`, built and signed by CI: server connection, sync, content, telemetry, operator commands and an end-to-end CI test against the Python server. Not yet run on hardware ([Checkpoint 1](docs/HEADSET_SETUP.md#checkpoint-1-hardware-check)). |
+| Headset app (native) | `player-android/`, built and signed by CI: server connection, sync, content, telemetry, operator commands and an end-to-end CI test against the Python server. Verified on an Oculus Go: connect, load/play/sync, recenter, worn/proximity, resume ([checks](docs/HEADSET_SETUP.md)). Stereo eye order and some edge cases remain untested. |
 | Headset app (Unity, legacy) | Never built or run on an Oculus Go; kept as a fallback until phase 5 of [docs/EXECUTION_PLAN.md](docs/EXECUTION_PLAN.md). See [docs/UNITY_PLAYER.md](docs/UNITY_PLAYER.md). |
 
 ## Roadmap
