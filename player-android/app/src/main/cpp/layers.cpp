@@ -110,13 +110,22 @@ ovrLayerCylinder2 MakeCylinderLayer(
     const ovrTracking2& tracking,
     ovrTextureSwapChain* chain,
     const ScreenPlacement& placement,
-    bool opaque) {
+    bool opaque,
+    bool chromaticAberrationCorrection) {
     ovrLayerCylinder2 layer = vrapi_DefaultLayerCylinder2();
     layer.HeadPose = tracking.HeadPose;
     layer.Header.Flags |= VRAPI_FRAME_LAYER_FLAG_CLIP_TO_TEXTURE_RECT;
     if (opaque) {
         layer.Header.SrcBlend = VRAPI_FRAME_LAYER_BLEND_ONE;
         layer.Header.DstBlend = VRAPI_FRAME_LAYER_BLEND_ZERO;
+    } else {
+        // Android Surface content is premultiplied alpha.
+        layer.Header.SrcBlend = VRAPI_FRAME_LAYER_BLEND_ONE;
+        layer.Header.DstBlend = VRAPI_FRAME_LAYER_BLEND_ONE_MINUS_SRC_ALPHA;
+    }
+    if (chromaticAberrationCorrection) {
+        // UNVERIFIED: flag name from VrApi_Types.h (an enum, so it cannot be tested with #ifdef).
+        layer.Header.Flags |= VRAPI_FRAME_LAYER_FLAG_CHROMATIC_ABERRATION_CORRECTION;
     }
 
     // Verified on Go (Checkpoint 1): this gives a flat screen in front of the viewer.

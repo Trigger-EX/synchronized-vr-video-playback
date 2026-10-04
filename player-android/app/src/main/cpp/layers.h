@@ -37,12 +37,15 @@ ovrLayerEquirect2 MakeEquirectLayer(
     const ovrTracking2& tracking, ovrTextureSwapChain* chain, bool stereoTopBottom, float yaw = 0.0f);
 
 // Texture shown on a rectangle of the compositor's hemi-cylinder (see ScreenPlacement).
-// `opaque` forces ONE/ZERO blending so the panel never shows what is behind it.
+// `opaque` forces ONE/ZERO blending so the layer never shows what is behind it; otherwise the
+// layer is blended premultiplied (ONE/ONE_MINUS_SRC_ALPHA). `chromaticAberrationCorrection`
+// asks the compositor to correct colour fringes on this layer (small text/borders).
 ovrLayerCylinder2 MakeCylinderLayer(
     const ovrTracking2& tracking,
     ovrTextureSwapChain* chain,
     const ScreenPlacement& placement,
-    bool opaque);
+    bool opaque,
+    bool chromaticAberrationCorrection = false);
 
 // App-rendered eye buffers (sphere fallback).
 ovrLayerProjection2 MakeProjectionLayer(

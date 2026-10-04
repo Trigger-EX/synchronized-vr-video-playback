@@ -3,9 +3,12 @@ package com.syncvr.player
 import android.graphics.Canvas
 import android.graphics.Color
 import android.graphics.Paint
+import android.graphics.PorterDuff
+import android.graphics.RectF
 import android.graphics.Typeface
 import android.util.Log
 import android.view.Surface
+import com.syncvr.player.core.PanelStyle
 
 /**
  * Draws the status panel with the software canvas into the compositor's panel swapchain surface.
@@ -15,15 +18,18 @@ class PanelRenderer {
     private var surface: Surface? = null
     private var loggedFailure = false
 
-    private val background = Paint().apply { color = Color.rgb(16, 18, 24) }
-    private val border = Paint().apply {
+    private val background = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.rgb(16, 18, 24) }
+    private val border = Paint(Paint.ANTI_ALIAS_FLAG).apply {
         color = Color.rgb(70, 80, 100)
         style = Paint.Style.STROKE
-        strokeWidth = 4f
+        strokeWidth = PanelStyle.BORDER_WIDTH
     }
-    private val title = textPaint(52f, bold = true)
-    private val body = textPaint(38f, bold = false)
-    private val status = textPaint(32f, bold = false).apply { color = Color.rgb(170, 200, 255) }
+    private val title = textPaint(PanelStyle.TITLE_SIZE, bold = true)
+    private val body = textPaint(PanelStyle.BODY_SIZE, bold = false)
+    private val status = textPaint(PanelStyle.STATUS_SIZE, bold = false).apply {
+        color = Color.rgb(170, 200, 255)
+    }
+    private val box = RectF()
 
     fun setSurface(s: Surface?) {
         surface = s
@@ -43,11 +49,22 @@ class PanelRenderer {
         try {
             val w = canvas.width.toFloat()
             val h = canvas.height.toFloat()
-            canvas.drawRect(0f, 0f, w, h, background)
-            canvas.drawRect(2f, 2f, w - 2f, h - 2f, border)
-            canvas.drawText(fit(line1, title, w - 48f), 24f, h * 0.30f, title)
-            canvas.drawText(fit(line2, body, w - 48f), 24f, h * 0.60f, body)
-            canvas.drawText(fit(line3, status, w - 48f), 24f, h * 0.88f, status)
+            // Transparent margin; the box edge is an anti-aliased rounded rect inside it.
+            canvas.drawColor(Color.TRANSPARENT, PorterDuff.Mode.CLEAR)
+            val m = PanelStyle.MARGIN
+            val r = PanelStyle.CORNER_RADIUS
+            box.set(m, m, w - m, h - m)
+            canvas.drawRoundRect(box, r, r, background)
+            // Stroke is centred on its path: inset by half the width so it stays inside the box,
+            // and let the outer half-texel-pair feather via anti-aliasing.
+            val half = PanelStyle.BORDER_WIDTH / 2f
+            box.set(m + half, m + half, w - m - half, h - m - half)
+            canvas.drawRoundRect(box, r - half, r - half, border)
+            val x = PanelStyle.TEXT_INSET
+            val maxText = w - 2f * x
+            canvas.drawText(fit(line1, title, maxText), x, h * 0.36f, title)
+            canvas.drawText(fit(line2, body, maxText), x, h * 0.60f, body)
+            canvas.drawText(fit(line3, status, maxText), x, h * 0.80f, status)
         } catch (e: Exception) {
             logFailure("draw", e)
         }

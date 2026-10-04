@@ -27,8 +27,11 @@ namespace syncvr {
 namespace {
 
 const int kVideoSwapChainSize = 2048;
-const int kPanelWidth = 1024;
-const int kPanelHeight = 256;
+// Panel texture size matches PanelStyle.kt (TEXTURE_WIDTH x TEXTURE_HEIGHT).
+const int kPanelWidth = 576;
+const int kPanelHeight = 144;
+// Panel layer is blended with its alpha (transparent margin). Set to true to go back to opaque.
+const bool kPanelAlpha = true;
 const int kCpuLevel = 2;
 const int kGpuLevel = 3;
 const double kFpsLogIntervalSeconds = 5.0;
@@ -576,7 +579,7 @@ void App::RunFrame(JNIEnv* env) {
             break;
     }
 
-    panelLayer = MakeCylinderLayer(tracking, panelChain_, PanelPlacement(panelProminent_.load()), true);
+    panelLayer = MakeCylinderLayer(tracking, panelChain_, PanelPlacement(panelProminent_.load()), !kPanelAlpha, kPanelAlpha);
     layers[layerCount++] = &panelLayer.Header;
 
     ovrSubmitFrameDescription2 frameDesc = {};
