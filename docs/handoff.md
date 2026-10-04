@@ -2,23 +2,22 @@
 
 ## Goal
 Replace the Unity headset app with a native Oculus Go player, following docs/EXECUTION_PLAN.md
-(order: 1A → 3.1 → 1B → 2 → 3.2 → 4 → 5). Right now: get Checkpoint 1 (hardware check) running on a real Go.
+(order: 1A → 3.1 → 1B → 2 → 3.2 → 4 → 5). Now: Phase 1B, the full native player.
 
 ## Decisions and constraints
-- `player-android/`: Kotlin + C++ VrApi 1.32 (Oculus Mobile SDK 15.0; Go final OS has VrApi 1.1.35 and rejects newer loaders), package `com.syncvr.player`, activity `.MainActivity`, minSdk 25, target 34, armeabi-v7a.
-- APK is built only in CI (job `player-android`, artifact `SyncVRPlayer-apk`); dl.google.com is blocked locally.
-- On the Go, VrApi's loader aborts if any `vrapi_*` query (e.g. `vrapi_GetVersionString`) runs before `vrapi_Initialize`. Only call VrApi from the render thread after `App::InitVrApi()` (cpp/app.cpp).
-- Launch by shell: `adb shell am start -n com.syncvr.player/.MainActivity` (or `python3 -m syncvr adb launch`).
+- `player-android/`: Kotlin + C++ on VrApi 1.32 (Mobile SDK 15.0, lovr-org/ovr_sdk_mobile f88e937). The Go's final OS has VrApi 1.1.35 and rejects newer loaders. Package `com.syncvr.player`, activity `.MainActivity`, minSdk 25, armeabi-v7a.
+- Only call VrApi on the render thread, after `App::InitVrApi()` (cpp/app.cpp).
+- The APK is built only in CI (job `player-android`). CI force-pushes it to the branch `apk/<branch>`. The user fetches it with `git apk [--install|--launch]` (player-android/tools/get-apk.sh).
+- Checkpoint 1 passed (results are in EXECUTION_PLAN.md): the main path is the equirect layer (mode 1), the sphere is the fallback, everything runs at 60 fps, and decoders handle up to 4096×2048 at 30 fps.
+- The user wants a woken headset to resync to the operator's playback position (Phase 1B step 7).
 
 ## Current state
-- Phase 1A and 3.1 done and merged to `main`.
-- User's first hardware run crashed instantly: SIGABRT "vrapi_GetVersionString was called before vrapi_Initialize()" from `MainActivity.onCreate` → `NativeBridge.vrApiVersion()`.
-- Fixed in 7145102 on branch `code/serene-albattani-a6633i` (removed the JNI `vrApiVersion` and its call; native `LogDiagnostics` already logs the version after init). Files: cpp/jni_bridge.cpp, MainActivity.kt, NativeBridge.kt. No PR yet. Not yet verified on hardware.
-- CI green on 0af6f40 (run 37169127216). APK given to user: https://github.com/Trigger-EX/synchronized-vr-video-playback/actions/runs/37169127216/artifacts/11290178126 (expires 2027-01-02).
+- Branch `code/serene-albattani-a6633i`, draft PR https://github.com/Trigger-EX/synchronized-vr-video-playback/pull/4 into main.
+- The branch has the VrApi 1.32 pin, APK publishing, `git apk --launch`, the checkpoint hooks/CLAUDE.md, and the checkpoint 1 results.
 
 ## Open questions
-- Checkpoint 1 results (display path, orientation, panel placement, decoder limits, pause behavior; see docs/HEADSET_SETUP.md).
-- Any further crash after this fix.
+- Stereo eye order (mode 4) is unverified. It needs a real top/bottom 3D video.
+- HW CHECK comments in cpp/layers.cpp (texture origin, cylinder size) still need tidying, since modes 1 to 3 looked right.
 
 ## Next step
-Wait for the user's hardware run of the new APK. If they send a crash log, fix it; if they send Checkpoint 1 results, apply them (display path, HW CHECK spots in cpp/layers.cpp, limits.py). Otherwise start Phase 1B step 1.
+Phase 1B: write numbered steps in docs/plan.md (it touches many files), commit, then start step 1 (port clock sync, sync engine, and protocol to Kotlin `core`, with the shared scenario tests).
