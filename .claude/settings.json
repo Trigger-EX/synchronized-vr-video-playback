@@ -1,5 +1,5 @@
 {
-  "model": "opusplan",
+  "model": "sonnet",
   "modelSettings": {
     "claude-opus-5-5": {
       "effortLevel": "high"
@@ -13,6 +13,7 @@
   "env": {
     "CLAUDE_CODE_SUBAGENT_MODEL": "sonnet"
   },
+  "showClearContextOnPlanAccept": true,
   "hooks": {
     "UserPromptSubmit": [
       {
