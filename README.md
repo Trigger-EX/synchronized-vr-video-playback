@@ -89,6 +89,17 @@ The native player has run on hardware (see the status table below).
    **±10 s**, the seek bar and **Play from start** all stay in sync.
 5. Watch the **drift** figure on each card: under ~20 ms is normal.
 
+## Launcher (PC control window)
+
+Double-click instead of using a terminal: `Start SyncVR.desktop` (Linux; on Linux Mint's Nemo choose
+"Trust and launch" the first time, or run `./start-syncvr.sh`) or `Start SyncVR.pyw` (Windows; WSL users
+should start it from Windows, not from inside WSL). It runs the server, opens the dashboard once, and shows
+a window with the headset count, the dashboard URL and buttons Open dashboard / Open content folder /
+Open log / Stop & quit. Content goes in `server/content`, logs in `server/data/logs/syncvr.log`.
+Without tkinter or a display (`sudo apt install python3-tk`) it runs in the terminal instead. Starting it a
+second time while port 8080 is taken just opens the running dashboard. Optional settings go in
+`server/data/launcher.json` (`content`, `http_port`, `name`, `password`, `open_browser`).
+
 ## Network and content recommendations
 
 * **Use a dedicated router** that you bring to the venue. Turn off *AP/client isolation*

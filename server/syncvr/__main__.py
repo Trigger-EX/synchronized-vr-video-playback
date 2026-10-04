@@ -34,6 +34,14 @@ def build_parser() -> argparse.ArgumentParser:
     serve.add_argument("--max-downloads", type=int, default=None,
                        help="headsets downloading content at the same time (0 = unlimited, default 4)")
 
+    gui = sub.add_parser("gui", help="PC control window: runs the server and opens the dashboard")
+    gui.add_argument("--content", default=None, help="video folder (default: server/content)")
+    gui.add_argument("--data", default=None, help="saved state folder (default: server/data)")
+    gui.add_argument("--http-port", type=int, default=None, help="dashboard port (default 8080)")
+    gui.add_argument("--no-discovery", action="store_true", help="do not broadcast beacons")
+    gui.add_argument("--no-browser", action="store_true", help="do not open the browser on start")
+    gui.add_argument("--console", action="store_true", help="skip the window, run in the terminal")
+
     simp = sub.add_parser("sim", help="run simulated headsets against a server")
     sim.add_arguments(simp)
 
@@ -44,6 +52,12 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main(argv=None) -> int:
     args = build_parser().parse_args(argv)
+    if args.command == "gui":
+        from . import launcher  # sets up its own file logging
+        try:
+            return launcher.main(args)
+        except KeyboardInterrupt:
+            return 0
     logging.basicConfig(level=logging.DEBUG if args.verbose else logging.INFO,
                         format="%(asctime)s %(levelname)-7s %(message)s", datefmt="%H:%M:%S")
     try:

@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Name=Start SyncVR
+Comment=Run the SyncVR server and open the dashboard
+Exec=sh -c 'cd "$(dirname "%k")" && ./start-syncvr.sh'
+Icon=video-display
+Terminal=false
+Categories=AudioVideo;
