@@ -1,13 +1,14 @@
 # SyncVR
 
 Synchronized video playback for Oculus Go fleets: Python server + dashboard (`server/`),
-Unity 2019.4 headset app (`headset/`), docs in `docs/` (start with `docs/EXECUTION_PLAN.md`).
+native Kotlin/C++ Go player (`player-android/`), docs in `docs/` (start with `docs/EXECUTION_PLAN.md`).
+The old Unity project in `headset/` is legacy and being retired; don't build, test or extend it.
 
 ## Session hygiene
 
 Commands
-- Build: none for the server (Python). Unity headset APK needs a local Unity 2019.4.41f2: `Unity -batchmode -quit -projectPath headset -executeMethod SyncVR.EditorTools.SyncVRBuild.BuildFromCommandLine -logFile build.log`. Native Go player APK (signed release, normally built in CI): `(cd player-android && ./gradlew --no-daemon :app:assembleRelease)`
-- Test: `(cd server && python3 -m pytest -q)`, `(cd player-android && ./gradlew --no-daemon :core:test)`, and `(cd headset && mcs -out:/tmp/enginetests.exe "Tests~/EngineTests.cs" Assets/SyncVR/Scripts/SyncEngine.cs Assets/SyncVR/Scripts/Messages.cs Assets/SyncVR/Scripts/ClockSync.cs && mono /tmp/enginetests.exe)`
+- Build: none for the server (Python). Go player APK (signed release, normally built in CI): `(cd player-android && ./gradlew --no-daemon :app:assembleRelease)`
+- Test: `(cd server && python3 -m pytest -q)` and `(cd player-android && ./gradlew --no-daemon :core:test)`
 
 Every message re-sends the whole conversation, so keep context small.
 
