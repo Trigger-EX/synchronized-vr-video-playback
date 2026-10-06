@@ -3,19 +3,19 @@ from syncvr.gui.proxy import (ProxyJob, cache_path, ffmpeg_args, parse_progress,
 
 
 def test_360_mono_5120_downscales():
-    assert proxy_plan(5120, 2560, "360", "mono") == (4608, 2304, "")
+    assert proxy_plan(5120, 2560, "360", "mono") == (3456, 1728, "")
 
 
 def test_360_mono_small_uses_original():
-    assert proxy_plan(4096, 2048, "360", "mono") is None
-    assert proxy_plan(4608, 2304, "360", "mono") is None
+    assert proxy_plan(3456, 1728, "360", "mono") is None
+    assert proxy_plan(3200, 1600, "360", "mono") is None
 
 
 def test_360_sbs_and_tb():
     w, h, c = proxy_plan(10240, 2560, "360", "sbs")  # eye 5120x2560
-    assert (w, h, c) == (4608, 2304, "crop=5120:2560:0:0")
+    assert (w, h, c) == (3456, 1728, "crop=5120:2560:0:0")
     w, h, c = proxy_plan(5120, 5120, "360", "tb")
-    assert (w, h, c) == (4608, 2304, "crop=5120:2560:0:0")
+    assert (w, h, c) == (3456, 1728, "crop=5120:2560:0:0")
 
 
 def test_stereo_never_upscales_but_still_crops():
@@ -23,8 +23,8 @@ def test_stereo_never_upscales_but_still_crops():
 
 
 def test_180():
-    assert proxy_plan(5760, 2880, "180", "sbs") == (2304, 2304, "crop=2880:2880:0:0")
-    assert proxy_plan(4096, 4096, "180", "mono") == (2304, 2304, "")
+    assert proxy_plan(5760, 2880, "180", "sbs") == (1728, 1728, "crop=2880:2880:0:0")
+    assert proxy_plan(4096, 4096, "180", "mono") == (1728, 1728, "")
     assert proxy_plan(2048, 2048, "180", "mono") is None
 
 
