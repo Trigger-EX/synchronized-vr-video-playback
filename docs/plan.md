@@ -56,3 +56,12 @@ Risks: 2:1 can be 360 mono or 180 SBS (filename token decides); native changes u
 - Pose: separate `pose_stream` (server->player, hz, auto-off after 15 s w/o renewal) and `pose` (player->server: yaw,pitch,roll deg) messages; server stores pose without `changed()`; `follow(device_id)` renews every 10 s; bridge.pose(device_id, cb).
 - Packages: P0 packaging; P1 gui/localsync.py (no Qt); P2 gui/projection.py (no Qt) + gui/sphereview.py (QOpenGLWidget); P3 gui/localplayer.py (MediaBackend, QtMediaBackend, LocalPlayerWindow, injected fakes); P4 playback.py 3 checkboxes (all off; video/audio-only exclusive; follow needs video) + main_window.py wiring; P5 player PoseStream.kt + PlayerController + native yaw; P6 controller.py/bridge.py/sim.py pose.
 - Deferred: rate nudging, BT latency offset, laptop volume link, stereo 3D on laptop.
+
+## Crash recovery mid show
+
+- `protocol.server_clock()` = monotonic() + _offset; persist `clock:{offset, wall_minus_mono, saved_wall}`; on start same boot (|wall-mono delta diff| < 2 s) keep offset, else rebase from wall clock. API: `set_clock_offset(x)`, `clock_epoch()->dict`, `rebase_clock(saved: dict|None)`.
+- Player: optional `status.anchor = {pos, at, loop}` while anchored (old apps omit it).
+- Persist `desired` per device in the store with `saved_wall`; heartbeat save every 30 s while any headset plays/paused; drop restored desired if > 30 min stale.
+- Reconcile on restart: `Controller.recovering_until = now+20 s`; `headset_connected` holds `_send_desired`; first synced status (or 3 s) -> `_reconcile(dev)`: adopt reported video/state (copy anchor exactly; else rebuild from expected/position, group within 0.25 s, snap to median); only send to headsets whose adopted state differs; idle headsets join group consensus; late headsets get consensus at window end; log "Recovered show: N headsets rejoined at mm:ss (video)", `server.recovery` in snapshot. Operator commands cancel recovery for their targets.
+- Supervisor: launcher re-runs itself as child (`--supervised`), restarts on non-zero exit/signal (backoff 1/2/5 s, max 5 per 10 min); child gets `--recovered`, window shows a banner once.
+- WP1 protocol.py+app.py+test_clock_epoch.py; WP2 controller.py+test_recovery.py; WP3 sync_engine.py status anchor, sim.py (true_error via server_clock, --no-anchor), SyncEngine.kt writeStatus + test, PROTOCOL.md; WP4 launcher.py, __main__.py, gui/main_window.py banner, test_launcher.py.
