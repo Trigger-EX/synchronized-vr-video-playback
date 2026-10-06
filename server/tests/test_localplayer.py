@@ -146,3 +146,26 @@ def test_window_close_signals(env):
     lp.windowClosed.connect(lambda: seen.append(1))
     lp.window.close()
     assert seen == [1]
+
+
+def test_no_frames_reports_decoder_problem(env):
+    lp, bridge, backends, views, errors = env
+    lp.set_mode("video")
+    lp.update(snap(), "a")
+    lp.tick()
+    assert lp._no_frame_timer.isActive()
+    lp._check_frames()
+    assert errors and "no video frames" in errors[-1]
+
+
+def test_frame_cancels_no_frame_watch(env):
+    lp, bridge, backends, views, errors = env
+    lp.set_mode("video")
+    lp.update(snap(), "a")
+    lp.tick()
+    from PySide6.QtGui import QImage
+    backends[0].on_frame(QImage(4, 4, QImage.Format_RGB32))
+    assert not lp._no_frame_timer.isActive()
+    lp._check_frames()
+    assert not errors
+    assert views[0].log[-1][0] == "frame"

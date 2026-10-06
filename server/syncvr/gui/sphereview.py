@@ -5,14 +5,19 @@ Import only where PySide6.QtOpenGLWidgets exists (guard with try/except ImportEr
 from __future__ import annotations
 
 import array
+import logging
 import math
 
-from PySide6.QtCore import Qt, Signal
-from PySide6.QtGui import QImage, QMatrix3x3, QOpenGLFunctions
-from PySide6.QtOpenGL import QOpenGLShader, QOpenGLShaderProgram, QOpenGLTexture
+from PySide6.QtCore import QRectF, Qt, Signal
+from PySide6.QtGui import QColor, QImage, QOpenGLFunctions, QPainter
+from PySide6.QtOpenGL import (QOpenGLBuffer, QOpenGLShader, QOpenGLShaderProgram, QOpenGLTexture,
+                              QOpenGLVertexArrayObject)
 from PySide6.QtOpenGLWidgets import QOpenGLWidget
 
 from . import projection as proj
+
+log = logging.getLogger(__name__)
+MAX_TEX_W = 2048  # frames (5120x2560 HEVC...) are downscaled on the CPU to this width before upload
 
 _VERT = """
 attribute vec2 pos;
@@ -26,7 +31,9 @@ precision highp float;
 #endif
 varying vec2 ndc;
 uniform sampler2D tex;
-uniform mat3 view;
+uniform vec3 viewR0;
+uniform vec3 viewR1;
+uniform vec3 viewR2;
 uniform float tanHalf;
 uniform float aspect;
 uniform vec4 eye;       // u0, v0, u1, v1 (top-left origin)
@@ -40,7 +47,8 @@ void main() {
         if (p.x < 0.0 || p.x > 1.0 || p.y < 0.0 || p.y > 1.0) { gl_FragColor = vec4(0.0, 0.0, 0.0, 1.0); return; }
         uv = vec2(p.x, 1.0 - p.y);
     } else {
-        vec3 d = normalize(view * vec3(ndc.x * tanHalf * aspect, ndc.y * tanHalf, 1.0));
+        vec3 v = vec3(ndc.x * tanHalf * aspect, ndc.y * tanHalf, 1.0);
+        vec3 d = normalize(vec3(dot(viewR0, v), dot(viewR1, v), dot(viewR2, v)));
         float lon = atan(d.x, d.z);
         float lat = asin(clamp(d.y, -1.0, 1.0));
         if (mode == 1) {
@@ -59,13 +67,19 @@ void main() {
 
 class SphereView(QOpenGLWidget):
     poseChanged = Signal(float, float, float)  # yaw, pitch, roll (user drag)
+    problem = Signal(str)  # GL init/paint failure; the view keeps working through a CPU fallback
 
     def __init__(self, parent=None):
         super().__init__(parent)
         self._image: QImage | None = None
+        self._small: QImage | None = None  # downscaled copy used for both GL upload and CPU painting
         self._dirty = False
         self._tex: QOpenGLTexture | None = None
         self._prog: QOpenGLShaderProgram | None = None
+        self._vao = None
+        self._vbo = None
+        self.failed: str | None = None
+        self._status = ""
         self._projection, self._stereo, self._rotation = "360", "mono", 0.0
         self._yaw = self._pitch = self._roll = 0.0
         self._fov = proj.FOV_DEFAULT
@@ -78,6 +92,19 @@ class SphereView(QOpenGLWidget):
         if self.isVisible():  # skip texture upload (and repaint) while hidden
             self._dirty = True
             self.update()
+
+    def set_status(self, text: str) -> None:
+        """Overlay message (errors, 'no frames'); empty clears it."""
+        if text != self._status:
+            self._status = text or ""
+            self.update()
+
+    def _fail(self, reason: str) -> None:
+        if self.failed is None:
+            self.failed = reason
+            log.error("SphereView: GL rendering disabled, using CPU fallback: %s", reason)
+            self._dirty = True
+            self.problem.emit(reason)
 
     def set_view(self, projection: str, stereo: str, rotation: float = 0.0) -> None:
         self._projection = proj.norm_projection(projection)
@@ -124,44 +151,102 @@ class SphereView(QOpenGLWidget):
 
     # -- GL
     def initializeGL(self):
-        self._gl = QOpenGLFunctions(self.context())
-        self._gl.initializeOpenGLFunctions()
-        p = QOpenGLShaderProgram(self)
-        p.addShaderFromSourceCode(QOpenGLShader.Vertex, _VERT)
-        p.addShaderFromSourceCode(QOpenGLShader.Fragment, _FRAG)
-        p.bindAttributeLocation("pos", 0)
-        p.link()
-        self._prog = p
+        try:
+            self._init_gl()
+        except Exception as e:  # noqa: BLE001 - any GL problem must degrade, not blank the window
+            log.exception("SphereView: GL init failed")
+            self._fail("GL init failed: %s" % e)
 
-    def _upload(self):
+    def _init_gl(self) -> None:
+        ctx = self.context()
+        fmt = ctx.format()
+        log.info("SphereView: GL context %d.%d profile=%s", fmt.majorVersion(), fmt.minorVersion(),
+                 fmt.profile().name if hasattr(fmt.profile(), "name") else fmt.profile())
+        self._gl = QOpenGLFunctions(ctx)
+        self._gl.initializeOpenGLFunctions()
+        try:
+            self._vao = QOpenGLVertexArrayObject(self)
+            if self._vao.create():
+                self._vao.bind()
+            else:
+                self._vao = None
+        except Exception:  # noqa: BLE001
+            log.warning("SphereView: no VAO support", exc_info=True)
+            self._vao = None
+        p = QOpenGLShaderProgram(self)
+        if not p.addShaderFromSourceCode(QOpenGLShader.Vertex, _VERT):
+            raise RuntimeError("vertex shader compile failed: %s" % p.log())
+        if not p.addShaderFromSourceCode(QOpenGLShader.Fragment, _FRAG):
+            raise RuntimeError("fragment shader compile failed: %s" % p.log())
+        p.bindAttributeLocation("pos", 0)
+        if not p.link():
+            raise RuntimeError("shader link failed: %s" % p.log())
+        if p.log():
+            log.info("SphereView: shader log: %s", p.log())
+        self._prog = p
+        data = array.array("f", [-1, -1, 1, -1, -1, 1, 1, 1]).tobytes()
+        vbo = QOpenGLBuffer(QOpenGLBuffer.VertexBuffer)
+        if not vbo.create():
+            raise RuntimeError("vertex buffer create failed")
+        vbo.bind()
+        vbo.allocate(data, len(data))
+        self._vbo = vbo
+        if self._vao is not None:
+            self._vao.release()
+
+    def _prepare(self) -> None:
+        """Downscaled copy of the newest frame (cheap to upload and to paint)."""
         self._dirty = False
-        if self._image is None or self._image.isNull():
+        img = self._image
+        if img is None or img.isNull():
+            self._small = None
             return
-        if self._tex is not None:
-            self._tex.destroy()
-        self._tex = QOpenGLTexture(self._image.convertToFormat(QImage.Format_RGBA8888),
-                                   QOpenGLTexture.DontGenerateMipMaps)
-        self._tex.setMinMagFilters(QOpenGLTexture.Linear, QOpenGLTexture.Linear)
-        self._tex.setWrapMode(QOpenGLTexture.ClampToEdge)
+        if img.width() > MAX_TEX_W:
+            img = img.scaledToWidth(MAX_TEX_W, Qt.FastTransformation)
+        self._small = img
+        if self.failed is None:
+            if self._tex is not None:
+                self._tex.destroy()
+                self._tex = None
+            tex = QOpenGLTexture(img.convertToFormat(QImage.Format_RGBA8888), QOpenGLTexture.DontGenerateMipMaps)
+            if not tex.isCreated():
+                raise RuntimeError("texture creation failed for %dx%d image" % (img.width(), img.height()))
+            tex.setMinMagFilters(QOpenGLTexture.Linear, QOpenGLTexture.Linear)
+            tex.setWrapMode(QOpenGLTexture.ClampToEdge)
+            self._tex = tex
 
     def paintGL(self):
+        try:
+            if self.failed is None and self._prog is not None:
+                self._paint_gl()
+                return
+        except Exception as e:  # noqa: BLE001
+            log.exception("SphereView: paintGL failed")
+            self._fail("GL paint failed: %s" % e)
+        self._paint_cpu()
+
+    def _paint_gl(self) -> None:
         gl = self._gl
         gl.glClearColor(0, 0, 0, 1)
         gl.glClear(0x4000)
-        if not self.isVisible() or self._prog is None:
+        if not self.isVisible():
             return
         if self._dirty:
-            self._upload()
-        if self._tex is None or self._image is None:
+            self._prepare()
+        if self._tex is None or self._small is None:
+            self._overlay(self._status or "Waiting for video\u2026")
             return
         w, h = max(self.width(), 1), max(self.height(), 1)
         m = proj.view_matrix(self._yaw, self._pitch, self._roll, self._rotation)
         r = proj.left_eye_rect(self._stereo)
         mode = {"360": 0, "180": 1, "flat": 2}[self._projection]
-        ea = proj.eye_aspect(self._image.width(), self._image.height(), self._stereo)
+        ea = proj.eye_aspect(self._small.width(), self._small.height(), self._stereo)
         fx, fy, fw, fh = proj.flat_rect(ea, w, h)
         p = self._prog
+        gl.glGetError()  # clear stale errors
         p.bind()
+        if self._vao is not None:
+            self._vao.bind()
         self._tex.bind()
         p.setUniformValue1i(p.uniformLocation("tex"), 0)
         p.setUniformValue1i(p.uniformLocation("mode"), mode)
@@ -169,10 +254,59 @@ class SphereView(QOpenGLWidget):
         p.setUniformValue1f(p.uniformLocation("aspect"), w / h)
         p.setUniformValue4f(p.uniformLocation("eye"), *r)
         p.setUniformValue4f(p.uniformLocation("flatRect"), fx / w, 1 - (fy + fh) / h, fw / w, fh / h)
-        loc = p.uniformLocation("view")
-        p.setUniformValue(loc, QMatrix3x3([c for row in m for c in row]))
-        verts = array.array("f", [-1, -1, 1, -1, -1, 1, 1, 1])
-        gl.glEnableVertexAttribArray(0)
-        gl.glVertexAttribPointer(0, 2, 0x1406, 0, 0, verts.tobytes())
+        for i in range(3):
+            p.setUniformValue(p.uniformLocation("viewR%d" % i), float(m[i][0]), float(m[i][1]), float(m[i][2]))
+        self._vbo.bind()
+        p.enableAttributeArray(0)
+        p.setAttributeBuffer(0, 0x1406, 0, 2, 8)
         gl.glDrawArrays(0x0005, 0, 4)
+        p.disableAttributeArray(0)
+        self._vbo.release()
+        if self._vao is not None:
+            self._vao.release()
         p.release()
+        err = gl.glGetError()
+        if err:
+            raise RuntimeError("glGetError 0x%x after draw" % err)
+        if self._status:
+            self._overlay(self._status)
+
+    # -- CPU fallback / overlay
+    def _paint_cpu(self) -> None:
+        if self._dirty:
+            try:
+                self._prepare()
+            except Exception:  # noqa: BLE001
+                log.exception("SphereView: frame preparation failed")
+        pt = QPainter(self)
+        try:
+            pt.fillRect(self.rect(), QColor(0, 0, 0))
+            img = self._small
+            if img is not None and not img.isNull():
+                u0, v0, u1, v1 = proj.left_eye_rect(self._stereo)
+                src = QRectF(u0 * img.width(), v0 * img.height(), (u1 - u0) * img.width(), (v1 - v0) * img.height())
+                k = min(self.width() / max(src.width(), 1), self.height() / max(src.height(), 1))
+                dw, dh = src.width() * k, src.height() * k
+                dst = QRectF((self.width() - dw) / 2, (self.height() - dh) / 2, dw, dh)
+                pt.drawImage(dst, img, src)
+            self._draw_text(pt, self._status or (("GL unavailable (%s) - flat preview" % self.failed)
+                                                 if self.failed and img is not None else
+                                                 self.failed or "Waiting for video\u2026"))
+        finally:
+            pt.end()
+
+    def _overlay(self, text: str) -> None:
+        pt = QPainter(self)
+        try:
+            self._draw_text(pt, text)
+        finally:
+            pt.end()
+
+    def _draw_text(self, pt: QPainter, text: str) -> None:
+        if not text:
+            return
+        r = QRectF(8, 8, max(self.width() - 16, 1), max(self.height() - 16, 1))
+        pt.setPen(QColor(255, 255, 255))
+        box = pt.boundingRect(r, Qt.AlignTop | Qt.AlignLeft | Qt.TextWordWrap, text)
+        pt.fillRect(box.adjusted(-4, -2, 4, 2), QColor(0, 0, 0, 170))
+        pt.drawText(r, Qt.AlignTop | Qt.AlignLeft | Qt.TextWordWrap, text)

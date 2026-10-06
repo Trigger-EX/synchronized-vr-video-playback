@@ -2,6 +2,7 @@
 the video in a pop-out sphere view that can mirror the headset's view direction."""
 from __future__ import annotations
 
+import logging
 import os
 from typing import Callable, Optional, Protocol
 
@@ -16,7 +17,11 @@ try:  # needs PySide6-Addons / OpenGL support
 except ImportError:
     SphereView = None
 
+log = logging.getLogger(__name__)
+
 TICK_MS = 250
+NO_FRAME_MS = 5000  # playing this long without a video frame => report a decoder problem
+NO_FRAME_TEXT = "no video frames received (codec/decoder problem?)"
 POSE_MS = 100  # 10 Hz
 MEDIA_HINT = "install the media extra (pip install 'syncvr[media]')"
 
@@ -51,6 +56,7 @@ class QtMediaBackend:
             self._sink.videoFrameChanged.connect(self._frame)
             self._player.setVideoSink(self._sink)
         self._player.errorOccurred.connect(self._error)
+        self._player.mediaStatusChanged.connect(self._status)
 
     @staticmethod
     def available():
@@ -61,10 +67,30 @@ class QtMediaBackend:
         return True, ""
 
     def _frame(self, frame) -> None:
-        if self.on_frame and frame.isValid():
-            self.on_frame(frame.toImage())
+        if not self.on_frame or not frame.isValid():
+            return
+        try:
+            img = frame.toImage()
+        except Exception as e:  # noqa: BLE001
+            self._report("cannot convert video frame: %s" % e)
+            return
+        if img.isNull():
+            self._report("video frame could not be converted to an image")
+            return
+        self.on_frame(img)
 
-    def _error(self, _code, text="") -> None:
+    def _report(self, text: str) -> None:
+        log.error("local playback: %s", text)
+        if self.on_error:
+            self.on_error(text)
+
+    def _status(self, status) -> None:
+        log.info("local playback: media status %s", getattr(status, "name", status))
+        if getattr(status, "name", "") == "InvalidMedia":
+            self._report("invalid media (unsupported codec/container?)")
+
+    def _error(self, code, text="") -> None:
+        log.error("local playback: media error %s: %s", getattr(code, "name", code), text)
         if self.on_error:
             self.on_error(text or "media playback error")
 
@@ -138,6 +164,11 @@ class LocalPlayer(QObject):
         self._failed: Optional[str] = None  # path (or error text) not retried until the video changes
         self._state = "stopped"
         self._view_key = None
+        self._frames = 0
+        self._no_frame_timer = QTimer(self)
+        self._no_frame_timer.setSingleShot(True)
+        self._no_frame_timer.setInterval(NO_FRAME_MS)
+        self._no_frame_timer.timeout.connect(self._check_frames)
         self._timer = QTimer(self)
         self._timer.setInterval(TICK_MS)
         self._timer.timeout.connect(self.tick)
@@ -175,7 +206,7 @@ class LocalPlayer(QObject):
         self.backend.on_error = self._backend_error
         if mode == "video":
             self._ensure_window()
-            self.backend.on_frame = self.window.view.set_frame
+            self.backend.on_frame = self._on_frame
             self.window.show()
         self._timer.start()
         self._apply_follow()
@@ -221,6 +252,8 @@ class LocalPlayer(QObject):
             self.backend.stop()
             self.backend.load(path)
             self._loaded, self._state = path, "stopped"
+            self._frames = 0
+            self._no_frame_timer.stop()
             p["seek"] = True
             self._sync.reset()
             self._sync.step(self._snapshot, self._focus or "", self._server_now(), self._content_dir, None)
@@ -230,11 +263,41 @@ class LocalPlayer(QObject):
         if p["mode"] == "play" and self._state != "playing":
             self.backend.play()
             self._state = "playing"
+            self._arm_frame_watch()
         elif p["mode"] == "pause" and self._state != "paused":
             self.backend.pause()
             self._state = "paused"
 
+    def _arm_frame_watch(self) -> None:
+        if self.mode == "video" and self._frames == 0 and not self._no_frame_timer.isActive():
+            self._no_frame_timer.start()
+
+    def _on_frame(self, image) -> None:
+        if self._frames == 0:
+            log.info("local playback: first video frame (%s)", getattr(image, "size", lambda: "?")())
+            self._set_status("")
+        self._frames += 1
+        self._no_frame_timer.stop()
+        if self.window is not None:
+            self.window.view.set_frame(image)
+
+    def _check_frames(self) -> None:
+        if self._frames == 0 and self._state == "playing" and self._loaded:
+            self._show_error(NO_FRAME_TEXT)
+
+    def _set_status(self, text: str) -> None:
+        view = self.window.view if self.window is not None else None
+        if view is not None and hasattr(view, "set_status"):
+            view.set_status(text)
+
+    def _show_error(self, text: str) -> None:
+        log.error("local playback: %s", text)
+        self._set_status(text)
+        self.error.emit(text)
+
     def _halt(self) -> None:
+        self._no_frame_timer.stop()
+        self._frames = 0
         if self._loaded or self._state != "stopped":
             self.backend.stop()
         self._loaded, self._state = None, "stopped"
@@ -244,7 +307,7 @@ class LocalPlayer(QObject):
             return
         self._failed = key
         self._halt()
-        self.error.emit(text)
+        self._show_error(text)
 
     def _backend_error(self, text: str) -> None:
         name = os.path.basename(self._loaded or "") or "video"
@@ -255,6 +318,11 @@ class LocalPlayer(QObject):
     def _ensure_window(self) -> None:
         if self.window is None:
             self.window = LocalPlayerWindow(self._view_factory())
+            if hasattr(self.window.view, "set_status"):
+                self.window.view.set_status("Waiting for video\u2026")
+            problem = getattr(self.window.view, "problem", None)
+            if problem is not None:
+                problem.connect(lambda r: self.error.emit("Video view: %s (using slower CPU rendering)" % r))
             self.window.closed.connect(self._on_window_closed)
 
     def _update_view(self, name: str) -> None:
@@ -291,6 +359,8 @@ class LocalPlayer(QObject):
 
     def _teardown(self) -> None:
         self._timer.stop()
+        self._no_frame_timer.stop()
+        self._frames = 0
         if self._follow:
             self._bridge.unfollow()
             self._follow = None
