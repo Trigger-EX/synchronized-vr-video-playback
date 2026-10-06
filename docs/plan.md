@@ -1,67 +1,67 @@
-# Plan: native Qt operator panel, no web dashboard, self-contained packaging
+# Plan: bringing the old CXVR panel's commands into SyncVR
 
-## Decisions
-- GUI calls `Controller` in-process on the server loop (no HTTP-to-self). `ServerThread.call(fn, *args) -> Future`; `gui/bridge.py` `Bridge(QObject)` emits `state(object)` / `result(...)`; controller listener sets a dirty flag, 250 ms QTimer pulls `snapshot_async()`, 1 s fallback. Widgets only receive snapshot dicts and call bridge methods.
-- Package `server/syncvr/gui/`: `app.py` (run_window, show_error, single-instance), `bridge.py`, `main_window.py`, `headsets.py`, `library.py`, `settings.py`, `log.py`, `playback.py`, `format.py` (Qt-free, ported from web/app.js; drift <25 good, <80 meh, else poor). Delete `qt_ui.py`.
-- Keep all `/api/*` routes, `/content/{name}` and the 8765 sniffer (Android operator app + headsets use them). Remove `/`, `/static`, `/ws`, the push loop and `server/syncvr/web/`; `/` returns JSON "SyncVR API". Drop `open_browser`, `--no-browser`, `dashboard_url`; status bar shows "Operator app address: ip:8080".
-- Packaging: PyInstaller onedir, built natively per OS in CI (ubuntu-22.04 with xcb libs apt-installed, windows-latest --windowed, macos-14 arm64 ad-hoc signed). Published as rolling prerelease GitHub Release `desktop-<branch>`; fetched with `tools/get-desktop.sh` / `.ps1`. Source launcher stays as developer path.
-- `paths.py`: frozen data in per-user dir (XDG_DATA_HOME/SyncVR, %LOCALAPPDATA%\SyncVR, ~/Library/Application Support/SyncVR), `portable` marker file next to the exe uses folders beside it; from source keep server/data and server/content. Single instance via QLockFile. `--self-test` flag: server on port 0, offscreen Qt, snapshot, exit 0.
+Source: `Trigger-EX/vr-control-panel` (Tkinter, adb). Goal: consolidate its worthwhile commands here without duplicating what SyncVR has (volume, content push/delete/verify/resume, adb connect/wifi/reboot/launch/stop/shell/kiosk, telemetry, identify, recenter, scrcpy mirror) and without copying code verbatim.
 
-## Steps (one commit each)
-1. launcher `ServerThread.call`; `gui/format.py` + tests.
-2. `gui/bridge.py`, `app.py`, `main_window.py`; launcher uses gui.app; delete qt_ui.py; `tests/test_gui_window.py`; `qapp` fixture in conftest.
-3. `gui/playback.py` + tests (FakeBridge).
-4. `gui/headsets.py` (cards, group filter, show offline, multi-select, edit dialog/forget) + tests.
-5. `gui/library.py` (table, editable projection/stereo/rotation/loop, on-headsets count, rescan) + tests.
-6. `gui/settings.py` (SETTINGS_SPEC, defaults, max downloads), `gui/log.py` + tests.
-7. `tests/test_gui_integration.py` with real ServerThread + sim headsets.
-8. Remove dashboard (web.py, web/, pyproject package-data, __main__ help, launcher, app.py log line, test_integration `/` `/ws` asserts, test_dashboard_url).
-9. `paths.py`, single-instance, choose-content-folder, `tests/test_paths.py`.
-10. `packaging/syncvr.spec`, `packaging/entry.py`, CI `desktop` matrix job with `--self-test`, release upload.
-11. `tools/get-desktop.sh|.ps1`; README, EXECUTION_PLAN, bootstrap messages.
+## Findings that shaped the plan
+- **Reboot:** the old panel never sends keyevent 26. `rebootAll.sh` runs `adb shell reboot`, `powerOff.sh` runs `shell reboot -p`. SyncVR's `adbtool reboot` (`adbtool.py:328`) is correct; port neither script. Reboot is CLI-only today; exposing it in the GUI is optional.
+- **Mirror exists:** `gui/mirror.py` (`MirrorManager`) and `gui/viewpane.py` already do scrcpy. Only the multi-headset part (tiled capture-all, batch cycling, close-all) is new.
+- **GUI is PySide6** (`gui/main_window.py` tabs; selection is `window.targets` / `target_spec()`). `web.py` is a JSON API only.
+- **Single process:** the old panel used marker files because its daemons were separate processes. Here the brakes become in-memory controller state, which removes the stale-sentinel bug (audit M8).
+- **adb hardening needed first:** `Adb.run` has no default timeout, inherits stdin, and decodes UTF-8 strictly (audit C1, L5, M6/L18).
+
+## Architecture decisions
+1. **`server/syncvr/fleetops.py` (no Qt).** `AdbFleet` wraps `Adb`: `stdin=DEVNULL`, `errors="replace"`, default timeout 20 s, one shared `ThreadPoolExecutor` capped at 10 (audit M11). `adb_serial(dev)` returns `ip:5555` if listed by `adb devices`, else USB `dev.serial`, else "not reachable by adb". `Device.saved()` also persists `ip`.
+2. **Jobs, not blocking calls.** `Controller.execute` stays synchronous. New adb actions (`sleep`, `wake`, `screen_refresh`, `poweroff`, `snapshot`) start a job on the executor and return `{"job": id}`. Results return via `loop.call_soon_threadsafe` into `log_event` (one OK/FAILED line per headset) and a new `jobs` field in `snapshot()`.
+3. **Server-checked confirmation tokens.** `POST /api/command/preview {action, targets, dry_run}` returns `{scope_text, labels[], token, needs_confirm}`; token = hash(action, sorted adb serials, dry_run). Confirm-required actions fail without a matching `confirm: token`. GUI shows `scope_text` ("Sleep 3 headsets: A, B, C" / "EVERY headset (72)").
+4. **Dry run.** Destructive actions (power off, purge) take `dry_run`, default true: resolve and log "would ...", send nothing.
+5. **Feature gating (`features.py`).** Registry key -> (category, label); tested set persisted in state.json as `tested_features`; `snapshot()` exposes `features`. Server refuses a gated action unless marked tested or the request has `testing: true` (stricter than the old panel, which only hid buttons). GUI: untested actions live in a "Testing" section with Open / Mark tested.
+6. **Brakes (`automation.py`).** `Controller.brake()` returns a reason or None: `show_mode` (persisted), sync in progress (Distributor has active jobs), or CLI push lock (pid-file written by `adbtool push`, counts only while PID alive). Brakes block automation only; manual commands run but the confirmation says "Show Mode is on". Snapshot and topbar show brake state and last-run per watchdog.
+7. **Watchdogs.** One asyncio task each, started from `SyncServer.start()`. Cycle: observe (adb on executor, filtered on-device) -> pure `decide(history, obs, cfg)` -> re-check brake right before each send. State: `enabled`, `armed`, `last_cycle`, counters, decision ring buffer. **Armed never persists**; restart is always observe-only. Prefer player telemetry (online, worn, desired mode) over adb polls where it has the answer.
+8. **Terminal:** GUI only, POSIX only; never exposed through the web API.
+
+## Phases (each independently shippable)
+**P0 Foundation.** Harden `Adb.run`; add `fleetops.py`, `features.py`; controller jobs, `ip` in `saved()`, `preview()`, `tested_features`; web `/api/command/preview` and `/api/features/{key}`; `docs/PROTOCOL.md`. Tests: `server/tests/fakeadb/adb` (bash; logs argv to `$FAKE_ADB_LOG`, answers `devices`/`dumpsys` from `server/tests/fixtures/dumpsys/`), `test_fleetops.py`.
+
+**P1 Sleep / Wake / Screen Refresh / Power off.**
+- Sleep = keyevent 223, Wake = 224.
+- Refresh: one 223, poll `dumpsys power | grep mWakefulness` until Asleep (3 s timeout), wait `min_asleep_s` (default 1 s), send 224, confirm Awake. Replaces the old 16 SLEEPs / 5 WAKEs (audit M11/L1).
+- Power off = `reboot -p`, gated `power.poweroff`, dry run default, dialog lists every headset, all unticked.
+- Sleep adds headsets to an "intentionally asleep" set so stay-awake and the probe leave them alone (audit L28/M3); wake clears it.
+- Files: `gui/headsets.py` context menu; new `gui/tools.py` tab (Power + Testing cards); register in `gui/main_window.py`; CLI `sleep`/`wake`/`refresh` in `adbtool.py`. Tests: `test_fleetops.py`, `test_gui_tools.py` (scope wording, token mismatch, dry run).
+
+**P2 Show Mode and brakes.** `automation.py` `brake()`; `show_mode` persisted, `"brake"` in snapshot; `POST /api/show_mode`; push pid-lock in `adbtool.py`; topbar toggle + brake pill. Tests: persistence, stale PID doesn't brake, brake reason while downloads active.
+
+**P3 Diagnostic snapshot (read-only, gated `debug.snapshot`).** Ships before any watchdog can be armed (it collects the evidence). New `diagnostics.py`, per-command timeouts: dumpsys power/display/window windows/activity activities/audio/SurfaceFlinger (+`--list`)/thermalservice/battery; `logcat -d -t 2000`; `getprop`; optional screenshot via `adb exec-out screencap -p` (nothing written on headset, audit L14). Output `<data_dir>/snapshots/<label>_<serial>_<YYYYmmdd-HHMMSS-ffffff>/` (audit L13). Fleet concurrency 4 (audit L15). `SUMMARY.txt` from shared `parsers.py` (wakefulness, display state, focus, thermal status, battery temp), reused by watchdogs. GUI "Open folder". Tests: parsers on fixture dumps, folder layout.
+
+**P4 Watchdogs (each observe-only and gated).** In `automation.py`; GUI rows in `gui/tools.py` with Observe/Armed pill and an arm dialog quoting the exact rule; API `POST /api/watchdogs/{name}` `{enabled, armed, cfg}`.
+- *Stay-awake:* send 224 only to headsets whose wakefulness is not Awake and not intentionally asleep; default 15 s.
+- *Popup/crash:* BACK (4) only when `mCurrentFocus` is a known dialog (`Application Error|Application Not Responding` + evidence pattern) over the player; verify after send, stop after 3 failures. Crash (player disconnected, app not in front) -> existing `launch` (old version sent HOME on loose matching, audit M2).
+- *Overheat:* logcat since last cycle (`-T`), excluding the player's own lines, requires the prompt in the window list (audit M4). No built-in pattern; arming refused unless `pattern_confirmed` matches the pattern hash, set by "Test pattern against snapshot...".
+- *Black-screen probe:* act only on display OFF + app in front + Awake + not intentionally asleep + desired mode playing (audit M3); 3 consecutive samples, 120 s cooldown; recovery wake or refresh. Display ON but black is logged to `<data_dir>/probe/*.csv`, never acted on.
+- *Keepalive:* `adb connect` persisted IPs of headsets missing from `adb devices`, then wake (old one never reconnected, audit M5); each cycle catches and logs its own errors.
+Tests: `decide()` table tests on fixtures, fake clock, brake suppresses send while cycle still logged.
+
+**P5 Multi-headset capture.** `gui/mirror.py`: `start_many(devices, max_parallel=6)` with grid via `--window-x/-y/-width/-height` and `tile_geometry()` from QScreen; `BatchPreview` (pure, injected clock; groups of N, dwell, close before next); 15 fps tiles; WM class `SyncVR-batch`. View menu: Capture selected/all, Batch preview, Close all. Tests: grid geometry, batch stepping, parallel cap.
+
+**P6 Terminal (gated `terminal.shell`).** `gui/terminal.py` (QDockWidget + QPlainTextEdit) and Qt-free `termstream.py` (escape stripping, CR/backspace, 5,000-line cap; old design was sound). `pty.openpty` + `setsid`; local `bash -i`, headset `adb -s X shell`; cleanup SIGHUP then SIGKILL to the session. Disabled on Windows. Tests: `termstream` units, pty run against fake adb.
+
+**P7 Smaller items.** Mass connect (persisted IPs in parallel, optional subnet scan: TCP probe 5555, cap 32); purge = `adb disconnect` + mass connect, token + dry run default. Bandwidth: player-side download test via new `bandwidth_test` protocol message (recommended; matches the real HTTP content path) vs timed `adb push` — needs decision.
 
 ## Risks
-Thread safety (bridge-only access); in-place card updates (no rebuild); don't clobber user edits during refresh; Linux bundle libs; macOS arm64 only + Gatekeeper; Windows SmartScreen; existing server/data not found by frozen app; keep /api stable for Android e2e.
+- Empty `window.targets` means "all": power off must refuse "all" unless "EVERY headset (N)" wording was confirmed.
+- Headsets with no IP that never connected to the player can't be adb-targeted.
+- Executor callbacks must never touch controller state off the loop thread.
+- Watchdog rules are unverified on real Go hardware; need P3 snapshot evidence before arming. `decide()` design deserves an opus review.
+- Refresh interrupts playback (visible hitch); dialog must say so for playing headsets.
+- ~70 headsets x several watchdogs can flood the show AP: use a global poll budget.
 
-## Cannot verify here
-Seeing the GUI, Mint desktop launch, SmartScreen/Gatekeeper, HiDPI, real headsets, Windows/macOS builds (CI only).
+## Verify
+`(cd server && python3 -m pytest -q)` with fake adb on PATH; GUI tests under offscreen Qt like existing `test_gui_*`; manual check on 2-3 headsets (refresh, brake suppressing a send, snapshot folder, tiled capture).
 
----
-
-# Plan: default view type per video (no auto-cycling)
-
-Server already has `guess_format()`, editable `projection`/`stereo`, persistence. Player ignores `cmd.projection/stereo` and cycles 4 modes every 15 s.
-
-1. **Detection** (`server/syncvr/library.py`, `tests/test_library.py`): `guess_format` returns only matched fields; add `guess_from_resolution(w,h)` (2:1 -> 360 mono, 1:1 -> 360 tb, 4:1 -> 360 sbs, 1.6-1.9 -> flat mono, ~3.55 -> flat sbs, else 360 mono). Precedence: operator value > filename > resolution > default. Add non-editable `format_source` to `Video`/`to_json`. `update_meta` merges only changed keys; value `"auto"` for projection/stereo removes the stored key and re-detects.
-2. **Live view change** (`controller.py`, `protocol.py`, `docs/PROTOCOL.md`, `tests/test_controller_state.py`): `update_video` changing projection/stereo/rotation updates `desired` and sends `{"type":"view","video","projection","stereo","rotation"}` to devices playing that video.
-3. **GUI** (`gui/library.py`, `gui/playback.py` + tests): "Auto (detected: X)" choice and `format_source` tooltip; a "View" combo in the playback panel that sends `bridge.update_video`.
-4. **Core Kotlin**: `ViewSpec(layer, stereo, half)` + `from(projection, stereo)`; parse `view` into `PlayerHost.onViewCommand`; tests.
-5. **Native/app**: `nativeSetMode(handle, mode, stereo, half)`; SBS and 180 support in layers; `MainActivity` drops `modeTick` unless `--ez cycle_modes true`; apply view from commands. Unverified without hardware.
-6. **Docs**: HEADSET_SETUP / EXECUTION_PLAN: cycle is a debug option.
-
-Risks: 2:1 can be 360 mono or 180 SBS (filename token decides); native changes unverified on hardware; stored metadata for old videos counts as "operator".
-
-## Charge rate (amps) and Wi-Fi percentage
-
-- New optional status field `battery_current_a` (float A, + = charging, omitted when unknown). No protocol/controller change: status dict is stored as-is.
-- Player: `Telemetry.batteryCurrentA` + `TelemetryMath.batteryCurrentA(microAmps, charging)` (null for 0/MIN_VALUE; sign from charging flag, 0.01 A rounding); `TelemetrySampler` reads `BATTERY_PROPERTY_CURRENT_NOW` (try/catch).
-- Server `gui/format.py`: `wifi_percent(dbm)=clamp(2*(dbm+100),0,100)`; `wifi_class(pct)` >=70 good, >=50 meh, else poor; `fmt_current` "%+.2f A"; `current_class` meh when charging <0.3 A and battery <100%; `device_info` shows "wifi NN%" and the current entry when present.
-- Also: `sim.py` simulated field, `docs/PROTOCOL.md`, tests (TelemetryTest, PlayerControllerTest, test_gui_format, test_gui_headsets).
-- Risk: some kernels report mA not µA; verify on a real Go.
-
-## Operator local playback (video+audio, audio-only, follow headset view)
-
-- Engine: QtMultimedia (QMediaPlayer/QAudioOutput/QVideoSink) from PySide6-Addons, lazy import; checkboxes greyed with tooltip if unavailable. New extra `media = ["PySide6-Addons>=6.5"]`; packaging/syncvr.spec stops excluding QtMultimedia/QtOpenGL/QtOpenGLWidgets; CI installs `./server[gui,media]`.
-- Sync: laptop follows the snapshot's desired state of the focus headset (PlaybackPanel.focus_device) like a headset does; seek only when drift > 200 ms, 1.5 s cooldown.
-- Pose: separate `pose_stream` (server->player, hz, auto-off after 15 s w/o renewal) and `pose` (player->server: yaw,pitch,roll deg) messages; server stores pose without `changed()`; `follow(device_id)` renews every 10 s; bridge.pose(device_id, cb).
-- Packages: P0 packaging; P1 gui/localsync.py (no Qt); P2 gui/projection.py (no Qt) + gui/sphereview.py (QOpenGLWidget); P3 gui/localplayer.py (MediaBackend, QtMediaBackend, LocalPlayerWindow, injected fakes); P4 playback.py 3 checkboxes (all off; video/audio-only exclusive; follow needs video) + main_window.py wiring; P5 player PoseStream.kt + PlayerController + native yaw; P6 controller.py/bridge.py/sim.py pose.
-- Deferred: rate nudging, BT latency offset, laptop volume link, stereo 3D on laptop.
-
-## Crash recovery mid show
-
-- `protocol.server_clock()` = monotonic() + _offset; persist `clock:{offset, wall_minus_mono, saved_wall}`; on start same boot (|wall-mono delta diff| < 2 s) keep offset, else rebase from wall clock. API: `set_clock_offset(x)`, `clock_epoch()->dict`, `rebase_clock(saved: dict|None)`.
-- Player: optional `status.anchor = {pos, at, loop}` while anchored (old apps omit it).
-- Persist `desired` per device in the store with `saved_wall`; heartbeat save every 30 s while any headset plays/paused; drop restored desired if > 30 min stale.
-- Reconcile on restart: `Controller.recovering_until = now+20 s`; `headset_connected` holds `_send_desired`; first synced status (or 3 s) -> `_reconcile(dev)`: adopt reported video/state (copy anchor exactly; else rebuild from expected/position, group within 0.25 s, snap to median); only send to headsets whose adopted state differs; idle headsets join group consensus; late headsets get consensus at window end; log "Recovered show: N headsets rejoined at mm:ss (video)", `server.recovery` in snapshot. Operator commands cancel recovery for their targets.
-- Supervisor: launcher re-runs itself as child (`--supervised`), restarts on non-zero exit/signal (backoff 1/2/5 s, max 5 per 10 min); child gets `--recovered`, window shows a banner once.
-- WP1 protocol.py+app.py+test_clock_epoch.py; WP2 controller.py+test_recovery.py; WP3 sync_engine.py status anchor, sim.py (true_error via server_clock, --no-anchor), SyncEngine.kt writeStatus + test, PROTOCOL.md; WP4 launcher.py, __main__.py, gui/main_window.py banner, test_launcher.py.
+## Open questions
+1. Auto-enable Show Mode while any headset is playing?
+2. May any watchdog (e.g. black-screen probe) act while Show Mode is on?
+3. Should keepalive's `adb connect` be blocked by brakes?
+4. Bandwidth test: player-side (Kotlin change) or adb push?
+5. Should adb-only headsets (never ran the player) appear in the GUI?
+6. Which features already count as tested on real headsets?
