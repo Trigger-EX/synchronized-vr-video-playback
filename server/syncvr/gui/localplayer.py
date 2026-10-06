@@ -10,6 +10,7 @@ from PySide6.QtCore import QObject, QTimer, Signal
 from PySide6.QtGui import QImage
 from PySide6.QtWidgets import QVBoxLayout, QWidget
 
+from . import proxy as proxymod
 from .localsync import LocalSync
 
 try:  # needs PySide6-Addons / OpenGL support
@@ -143,8 +144,11 @@ class LocalPlayer(QObject):
     error = Signal(str)
     windowClosed = Signal()
     poseReceived = Signal(object)
+    _proxyProgress = Signal(str, float)
+    _proxyDone = Signal(str, str, str)  # source, proxy path or '', error
 
-    def __init__(self, bridge, content_dir, server_now, backend_factory=None, view_factory=None, parent=None):
+    def __init__(self, bridge, content_dir, server_now, backend_factory=None, view_factory=None, parent=None,
+                 proxy_job_factory=None):
         super().__init__(parent)
         self._bridge = bridge
         self._content_dir = content_dir
@@ -154,6 +158,15 @@ class LocalPlayer(QObject):
         self._injected = backend_factory is not None
         self._view_injected = view_factory is not None
         self._sync = LocalSync()
+        self._job_factory = proxy_job_factory or proxymod.default_job_factory
+        self._job = None
+        self._job_src: Optional[str] = None
+        self._proxies: dict = {}  # original path -> ready proxy path
+        self._proxy_failed: set = set()
+        self._loaded_src: Optional[str] = None
+        self._using_proxy = False
+        self._proxyProgress.connect(self._on_proxy_progress)
+        self._proxyDone.connect(self._on_proxy_done)
         self.mode: Optional[str] = None
         self.backend = None
         self.window: Optional[LocalPlayerWindow] = None
@@ -244,20 +257,30 @@ class LocalPlayer(QObject):
         if "error" in p:
             self._fail(p["error"], p["error"])
             return
-        path = p["path"]
-        if path == self._failed:
+        src = p["path"]
+        if src == self._failed:
             return
+        if self._job is not None and src != self._job_src:
+            self._cancel_proxy()
+        path = src
+        if src == self._loaded_src and self._loaded:
+            path = self._loaded
+        elif self.mode == "video":
+            path = self._resolve_proxy(src)
+            if path is None:
+                return  # laptop copy still being prepared
         if path != self._loaded:
             self._failed = None
             self.backend.stop()
             self.backend.load(path)
-            self._loaded, self._state = path, "stopped"
+            self._loaded, self._loaded_src, self._state = path, src, "stopped"
+            self._using_proxy = path != src
             self._frames = 0
             self._no_frame_timer.stop()
             p["seek"] = True
             self._sync.reset()
             self._sync.step(self._snapshot, self._focus or "", self._server_now(), self._content_dir, None)
-            self._update_view(os.path.basename(path))
+            self._update_view(os.path.basename(src))
         if p["seek"]:
             self.backend.seek(p["target_pos"])
         if p["mode"] == "play" and self._state != "playing":
@@ -295,12 +318,80 @@ class LocalPlayer(QObject):
         self._set_status(text)
         self.error.emit(text)
 
+    # ----------------------------------------------------------- laptop copy
+
+    def _resolve_proxy(self, src: str) -> Optional[str]:
+        """Path to play for `src` in video mode: the cached proxy, the original (no proxy needed or
+        possible), or None while the proxy is being made."""
+        if src in self._proxies and os.path.isfile(self._proxies[src]):
+            return self._proxies[src]
+        if src in self._proxy_failed:
+            return src
+        name = os.path.basename(src)
+        v = next((x for x in (self._snapshot or {}).get("library") or [] if x.get("name") == name), None) or {}
+        plan = proxymod.proxy_plan(v.get("width"), v.get("height"), v.get("projection"), v.get("stereo"))
+        if plan is None:
+            return src
+        dst = proxymod.cache_path(self._content_dir, name, v.get("size") or os.path.getsize(src),
+                                  v.get("mtime") or os.path.getmtime(src), plan)
+        if dst.is_file():
+            self._proxies[src] = str(dst)
+            return str(dst)
+        if self._job_src == src:
+            return None
+        self._cancel_proxy()
+        probe = v.get("probe") or {}
+        fps = (probe.get("video") or {}).get("fps")
+        acodec = (probe.get("audio") or {}).get("codec")
+        args = proxymod.ffmpeg_args(src, dst, plan, fps, acodec)
+        log.info("local playback: preparing laptop copy %s -> %dx%d", name, plan[0], plan[1])
+        self._set_status("Preparing laptop copy\u2026 0%")
+        self._job_src = src
+        try:
+            self._job = self._job_factory(
+                args, dst, v.get("duration"),
+                lambda pct, s=src: self._proxyProgress.emit(s, pct),
+                lambda out, err, s=src: self._proxyDone.emit(s, out or "", err or ""))
+            self._job.start()
+        except Exception as e:  # noqa: BLE001
+            self._job, self._job_src = None, None
+            self._proxy_unavailable(src, str(e))
+            return src
+        return None
+
+    def _cancel_proxy(self) -> None:
+        job, self._job, self._job_src = self._job, None, None
+        if job is not None:
+            job.cancel()
+
+    def _proxy_unavailable(self, src: str, why: str) -> None:
+        self._proxy_failed.add(src)
+        log.error("local playback: laptop copy failed (%s)", why)
+        self._set_status("")
+        self.error.emit("Laptop copy failed (%s); playing the original file" % why)
+
+    def _on_proxy_progress(self, src: str, pct: float) -> None:
+        if src == self._job_src:
+            self._set_status("Preparing laptop copy\u2026 %d%%" % int(pct))
+
+    def _on_proxy_done(self, src: str, out: str, err: str) -> None:
+        if src != self._job_src:
+            return
+        self._job, self._job_src = None, None
+        if out:
+            self._proxies[src] = out
+            self._set_status("")
+        else:
+            self._proxy_unavailable(src, err or "unknown error")
+        self.tick()
+
     def _halt(self) -> None:
+        self._cancel_proxy()
         self._no_frame_timer.stop()
         self._frames = 0
         if self._loaded or self._state != "stopped":
             self.backend.stop()
-        self._loaded, self._state = None, "stopped"
+        self._loaded, self._loaded_src, self._state = None, None, "stopped"
 
     def _fail(self, key: str, text: str) -> None:
         if self._failed == key:
@@ -311,7 +402,7 @@ class LocalPlayer(QObject):
 
     def _backend_error(self, text: str) -> None:
         name = os.path.basename(self._loaded or "") or "video"
-        self._fail(self._loaded or text, "Cannot play %s on this computer: %s" % (name, text))
+        self._fail(self._loaded_src or self._loaded or text, "Cannot play %s on this computer: %s" % (name, text))
 
     # ------------------------------------------------------------------ view
 
@@ -329,10 +420,11 @@ class LocalPlayer(QObject):
         if self.window is None:
             return
         v = next((x for x in (self._snapshot or {}).get("library") or [] if x.get("name") == name), None) or {}
-        key = (v.get("projection"), v.get("stereo"), v.get("rotation"))
+        stereo = "mono" if self._using_proxy else v.get("stereo")  # the laptop copy is left eye only
+        key = (v.get("projection"), stereo, v.get("rotation"))
         if key != self._view_key:
             self._view_key = key
-            self.window.view.set_view(v.get("projection") or "360", v.get("stereo") or "mono",
+            self.window.view.set_view(v.get("projection") or "360", stereo or "mono",
                                       v.get("rotation") or 0.0)
 
     def _on_window_closed(self) -> None:
@@ -359,6 +451,8 @@ class LocalPlayer(QObject):
 
     def _teardown(self) -> None:
         self._timer.stop()
+        self._cancel_proxy()
+        self._proxies.clear()
         self._no_frame_timer.stop()
         self._frames = 0
         if self._follow:
@@ -374,6 +468,8 @@ class LocalPlayer(QObject):
             self.window.close()
             self.window.deleteLater()
             self.window = None
-        self._loaded, self._failed, self._state, self._view_key = None, None, "stopped", None
+        self._loaded, self._loaded_src, self._failed, self._state, self._view_key = None, None, None, "stopped", None
+        self._using_proxy = False
+        self._proxy_failed.clear()
         self._sync.reset()
         self.mode = None

@@ -119,6 +119,8 @@ first time). The first run creates `server/.venv` and downloads aiohttp and PySi
 and on Mint `sudo apt install python3-venv`; if the window fails to start, `sudo apt install libxcb-cursor0`). It runs the server and shows
 a native operator window (headsets, library, settings, log, playback controls) and the "Operator app address" to type into the Android operator app. Content goes in `server/content`, logs in `server/data/logs/syncvr.log`.
 Laptop playback (QtMultimedia) is an optional ~200 MB add-on: click **Install media support** next to the playback checkboxes, then restart SyncVR (the desktop app bundle already includes it).
+
+In video mode, "Play on this computer" first makes a cached lower-resolution copy with ffmpeg (left eye only, mono, H.264 CRF 21, ~12.8 px/deg: 4608x2304 for 360, 2304x2304 for 180, max 1920 wide for flat) in `<content>/.laptop/`; without ffmpeg it plays the original. The headsets always get the original.
 Without PySide6 or a display it runs in the terminal instead (`SYNCVR_NO_VENV=1` skips the venv). Starting it a
 second time while port 8080 is taken shows a message and exits. Optional settings go in
 `server/data/launcher.json` (`content`, `http_port`, `name`, `password`).
