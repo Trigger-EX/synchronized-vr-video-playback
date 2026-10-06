@@ -111,7 +111,7 @@ tools\get-desktop.ps1           # Windows (PowerShell): installs into %USERPROFI
 Double-click instead of using a terminal: `Start SyncVR.desktop` (Linux; on Linux Mint's Nemo, right-click > Properties > Permissions > "Allow executing file as program", then choose
 "Trust and launch" the first time, or run `./start-syncvr.sh`) `Start SyncVR.pyw` (Windows; WSL users
 should start it from Windows, not from inside WSL) or `Start SyncVR.command` (macOS; right-click > Open the
-first time). The first run creates `server/.venv` and downloads aiohttp and PySide6 (~100 MB; needs internet,
+first time). The first run creates `server/.venv` and downloads aiohttp and PySide6 incl. the media add-on (~300 MB; needs internet,
 and on Mint `sudo apt install python3-venv`; if the window fails to start, `sudo apt install libxcb-cursor0`). It runs the server and shows
 a native operator window (headsets, library, settings, log, playback controls) and the "Operator app address" to type into the Android operator app. Content goes in `server/content`, logs in `server/data/logs/syncvr.log`.
 Without PySide6 or a display it runs in the terminal instead (`SYNCVR_NO_VENV=1` skips the venv). Starting it a

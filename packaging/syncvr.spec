@@ -1,5 +1,5 @@
 # PyInstaller spec: onedir, windowed. Build from the repo root:  pyinstaller packaging/syncvr.spec
-# Needs: pip install ./server[gui] pyinstaller   (PySide6-Essentials only, no Addons)
+# Needs: pip install "./server[gui,media]" pyinstaller   (PySide6 Essentials + Addons for QtMultimedia)
 import sys
 from pathlib import Path
 

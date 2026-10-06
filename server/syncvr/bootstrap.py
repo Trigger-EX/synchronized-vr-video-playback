@@ -14,7 +14,7 @@ from typing import List, Optional
 SERVER_DIR = Path(__file__).resolve().parent.parent
 VENV_DIR = SERVER_DIR / ".venv"
 STAMP_NAME = ".syncvr-deps"
-REQUIREMENTS = ["aiohttp>=3.8", "PySide6-Essentials>=6.5"]
+REQUIREMENTS = ["aiohttp>=3.8", "PySide6-Essentials>=6.5", "PySide6-Addons>=6.5"]
 
 
 def venv_python(venv: Path = VENV_DIR, gui_exe: Optional[bool] = None) -> Path:

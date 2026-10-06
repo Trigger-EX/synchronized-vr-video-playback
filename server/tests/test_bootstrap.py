@@ -48,5 +48,6 @@ def test_requirements_match_pyproject():
         import pytest
         pytest.skip("tomllib needs Python 3.11")
     data = tomllib.loads((bootstrap.SERVER_DIR / "pyproject.toml").read_text(encoding="utf-8"))
-    expected = set(data["project"]["dependencies"]) | set(data["project"]["optional-dependencies"]["gui"])
+    expected = set(data["project"]["dependencies"]) | set(data["project"]["optional-dependencies"]["gui"]) \
+        | set(data["project"]["optional-dependencies"]["media"])
     assert set(bootstrap.REQUIREMENTS) == expected
