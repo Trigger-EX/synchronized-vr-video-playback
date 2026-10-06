@@ -26,7 +26,7 @@ STATUS_MS = 5000
 
 class MainWindow(QMainWindow):
     def __init__(self, bridge, config, log_path: Path, mirror=None, finder=find_native_window, embedder=None,
-                 local_player=None):
+                 local_player=None, recovered: bool = False):
         super().__init__()
         self.bridge = bridge
         self._config = config
@@ -40,6 +40,8 @@ class MainWindow(QMainWindow):
         self._mirror_timer.timeout.connect(self.mirror.poll)
         self._mirror_timer.start()
         self.snapshot = None
+        self._recovery_shown = False
+        self.recovered = recovered
         self.received_at = 0.0
         self.targets = []  # selected headset ids; empty means every headset
         self.setWindowTitle("SyncVR")
@@ -145,6 +147,8 @@ class MainWindow(QMainWindow):
         bridge.result.connect(self.on_result)
         bridge.failed.connect(self.on_failed)
         bridge.stopped.connect(self.on_stopped)
+        if recovered:
+            self.show_recovered_banner()
 
     def choose_content_folder(self) -> None:
         folder = QFileDialog.getExistingDirectory(self, "Choose content folder", str(self._config.content_dir))
@@ -234,8 +238,21 @@ class MainWindow(QMainWindow):
         self.playback.update_state()
         self.sync_local()
 
+    def show_recovered_banner(self) -> None:
+        self.statusBar().showMessage("SyncVR restarted after a crash; rejoining headsets...", STATUS_MS * 6)
+
+    def _check_recovery(self, snap) -> None:
+        rec = (snap.get("server") or {}).get("recovery") or {}
+        if self._recovery_shown or not rec or rec.get("active") or not self.recovered:
+            return
+        self._recovery_shown = True
+        pos = int(rec.get("position") or 0)
+        self.statusBar().showMessage("Recovered show: %d headsets rejoined at %02d:%02d"
+                                     % (int(rec.get("rejoined") or 0), pos // 60, pos % 60), STATUS_MS * 6)
+
     def on_state(self, snap) -> None:
         self.snapshot = snap
+        self._check_recovery(snap)
         self.received_at = time.monotonic()
         known = {d["id"] for d in snap.get("devices") or []}
         self.targets = [i for i in self.targets if i in known]

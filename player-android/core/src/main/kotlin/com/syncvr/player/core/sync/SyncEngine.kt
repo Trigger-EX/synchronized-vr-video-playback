@@ -335,6 +335,10 @@ class SyncEngine(
             .field("mode", forcedMode ?: settings.correctionMode)
             .field("seek_time_ms", round(seekTime * 1000.0, 0))
             .field("start_latency_ms", round(startLatency * 1000.0, 0))
+        val a = anchor
+        if (a != null) {
+            w.raw("anchor", "{\"pos\":${round(a.pos, 3)},\"at\":${round(a.at, 3)},\"loop\":${a.loop}}")
+        }
     }
 
     /** Like .NET Math.Round(value, digits): scale, round half to even, unscale. */

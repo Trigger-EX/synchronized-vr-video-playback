@@ -3,6 +3,7 @@
 import asyncio
 import logging
 import signal
+import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import List, Optional
@@ -16,13 +17,14 @@ from .discovery import DiscoveryBeacon, default_broadcast_addresses, local_ipv4_
 from .headset_server import HeadsetServer, runner_kwargs
 from .library import Library
 from .protocol import (DEFAULT_DISCOVERY_PORT, DEFAULT_HTTP_PORT, DEFAULT_TCP_PORT, PROTOCOL_VERSION,
-                       SERVICE_NAME)
+                       SERVICE_NAME, clock_epoch, rebase_clock)
 from .store import StateStore
 from .web import WebApp
 
 log = logging.getLogger(__name__)
 
 SAVE_INTERVAL_S = 2.0
+HEARTBEAT_SAVE_S = 30.0  # save at least this often while any headset plays/paused
 RESCAN_INTERVAL_S = 30.0
 # In-flight downloads get this long to finish when the server stops (aiohttp's default is 60 s).
 SHUTDOWN_TIMEOUT_S = 2.0
@@ -54,7 +56,9 @@ class SyncServer:
                         "(install ffmpeg to enable). Checksums still work.")
         self.library = Library(Path(config.content_dir), analyzer=self.analyzer)
         self.controller = Controller(self.library, server_name=config.name)
-        self.controller.load(self.store.load())
+        saved = self.store.load()
+        rebase_clock(saved.get("clock") if isinstance(saved, dict) else None)
+        self.controller.load(saved)
         if config.max_downloads is not None:
             self.controller.set_max_downloads(config.max_downloads)
         self.library.scan()
@@ -134,15 +138,21 @@ class SyncServer:
     def _save(self) -> None:
         self.controller.dirty = False
         try:
-            self.store.save(self.controller.dump())
+            state = dict(self.controller.dump())
+            state["clock"] = clock_epoch()
+            self.store.save(state)
         except OSError as exc:
             log.error("could not save state: %s", exc)
 
     async def _save_loop(self) -> None:
+        last = time.monotonic()
         while True:
             await asyncio.sleep(SAVE_INTERVAL_S)
-            if self.controller.dirty:
+            any_active = getattr(self.controller, "any_active", None)
+            active = bool(any_active()) if callable(any_active) else False
+            if self.controller.dirty or (active and time.monotonic() - last >= HEARTBEAT_SAVE_S):
                 self._save()
+                last = time.monotonic()
 
     async def _rescan_loop(self) -> None:
         while True:

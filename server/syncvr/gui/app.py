@@ -50,11 +50,11 @@ def self_test(thread, config, log_path: Path, timeout_ms: int = 15000) -> bool:
     return bool(got) and "devices" in got[0]
 
 
-def run_window(thread, config, log_path: Path) -> None:
+def run_window(thread, config, log_path: Path, recovered: bool = False) -> None:
     app = _app()
     bridge = Bridge(thread)
     mirror = MirrorManager(tools_dir=load_overrides(config.data_dir).get("tools_dir", ""))
-    win = MainWindow(bridge, config, log_path, mirror)
+    win = MainWindow(bridge, config, log_path, mirror, recovered=recovered)
     app.aboutToQuit.connect(mirror.stop_all)
     signal.signal(signal.SIGINT, lambda *_: app.quit())
     keepalive = QTimer()  # lets the interpreter run so Ctrl+C is noticed

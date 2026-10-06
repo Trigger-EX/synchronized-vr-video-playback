@@ -41,6 +41,8 @@ def build_parser() -> argparse.ArgumentParser:
     gui.add_argument("--no-discovery", action="store_true", help="do not broadcast beacons")
     gui.add_argument("--self-test", action="store_true",
                      help="start the server on a free port with offscreen Qt, check one snapshot, exit 0 if it works")
+    gui.add_argument("--supervised", action="store_true", help=argparse.SUPPRESS)  # set by the supervisor
+    gui.add_argument("--recovered", action="store_true", help=argparse.SUPPRESS)  # restarted after a crash
     gui.add_argument("--console", action="store_true", help="skip the window, run in the terminal")
 
     simp = sub.add_parser("sim", help="run simulated headsets against a server")
@@ -53,6 +55,7 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main(argv=None) -> int:
     args = build_parser().parse_args(argv)
+    args.argv = list(sys.argv[1:] if argv is None else argv)
     if args.command == "gui":
         from . import launcher  # sets up its own file logging
         try:

@@ -121,6 +121,89 @@ def open_path(target) -> None:
         log.warning("could not open %s: %s", target, exc)
 
 
+# ---------------------------------------------------------------- supervisor
+
+BACKOFF_S = (1.0, 2.0, 5.0)
+MAX_RESTARTS = 5
+RESTART_WINDOW_S = 600.0
+PORT_WAIT_S = 10.0
+
+
+def supervisor_enabled(args) -> bool:
+    """The parent/child split applies to the window and console runs, not to the child itself or the self-test."""
+    return not (getattr(args, "supervised", False) or getattr(args, "self_test", False)
+                or os.environ.get("SYNCVR_NO_SUPERVISOR"))
+
+
+def child_command(argv: List[str], recovered: bool = False) -> List[str]:
+    """Command line that re-runs this app as the supervised child. argv is the full ``gui`` argument list."""
+    extra = ["--supervised"] + (["--recovered"] if recovered else [])
+    rest = [a for a in argv[1:] if a not in ("--supervised", "--recovered")] if argv[:1] == ["gui"] else \
+        [a for a in argv if a not in ("--supervised", "--recovered")]
+    if getattr(sys, "frozen", False):  # PyInstaller entry always implies "gui"
+        return [sys.executable] + rest + extra
+    return [sys.executable, "-m", "syncvr", "gui"] + rest + extra
+
+
+def supervise(argv: List[str], port: int = 0, spawn=None, sleep=time.sleep, clock=time.monotonic,
+              port_busy=port_in_use, say=None) -> int:
+    """Run the app as a child process and restart it after a crash (non-zero exit or signal).
+
+    Exit code 0 ends supervision. At most MAX_RESTARTS restarts per RESTART_WINDOW_S, then give up (return 1).
+    Restarted children get --recovered. spawn(cmd) returns an object with wait() -> returncode.
+    """
+    say = say or (lambda m: (log.warning(m), print(m, file=sys.stderr) if sys.stderr is not None else None))
+    spawn = spawn or (lambda cmd: subprocess.Popen(cmd))
+    restarts: List[float] = []
+    recovered = False
+    while True:
+        proc = spawn(child_command(argv, recovered))
+        try:
+            code = proc.wait()
+        except KeyboardInterrupt:
+            try:
+                proc.wait()  # the child got the same Ctrl+C
+            except Exception:
+                pass
+            return 0
+        if code == 0:
+            return 0
+        now = clock()
+        restarts = [t for t in restarts if now - t < RESTART_WINDOW_S]
+        if len(restarts) >= MAX_RESTARTS:
+            say("SyncVR keeps crashing (%d restarts in %d minutes, last exit code %s); giving up. "
+                "See the log in the data folder." % (len(restarts), RESTART_WINDOW_S // 60, code))
+            return 1
+        delay = BACKOFF_S[min(len(restarts), len(BACKOFF_S) - 1)]
+        restarts.append(now)
+        say("SyncVR exited unexpectedly (%s); restarting in %g s (restart %d of %d allowed per %d min)."
+            % ("signal %d" % -code if code < 0 else "code %s" % code, delay, len(restarts), MAX_RESTARTS,
+               RESTART_WINDOW_S // 60))
+        sleep(delay)
+        waited = 0.0
+        while port and port_busy(port) and waited < PORT_WAIT_S:  # old process may still hold the port
+            sleep(0.5)
+            waited += 0.5
+        recovered = True
+
+
+def _run_supervisor(args) -> int:
+    argv = list(getattr(args, "argv", None) or ["gui"] + sys.argv[1:])
+    data_dir = Path(args.data) if getattr(args, "data", None) else paths.data_dir()
+    port = args.http_port if getattr(args, "http_port", None) is not None else \
+        int(load_overrides(data_dir).get("http_port", DEFAULT_HTTP_PORT))
+    try:
+        log_dir = data_dir / "logs"
+        log_dir.mkdir(parents=True, exist_ok=True)
+        h = logging.FileHandler(log_dir / "supervisor.log", encoding="utf-8")
+        h.setFormatter(logging.Formatter("%(asctime)s %(levelname)-7s %(message)s", "%H:%M:%S"))
+        log.addHandler(h)
+        log.setLevel(logging.INFO)
+    except OSError:
+        pass
+    return supervise(argv, port=port)
+
+
 # ---------------------------------------------------------------- server thread
 
 class ServerThread:
@@ -370,6 +453,8 @@ def main(args) -> int:
     """Entry point for ``python -m syncvr gui``."""
     if getattr(args, "self_test", False):
         return _self_test(args)
+    if supervisor_enabled(args):
+        return _run_supervisor(args)
     qt_ok = qt_available(args.console)
     try:
         __import__("aiohttp")  # availability probe
@@ -420,7 +505,7 @@ def main(args) -> int:
     try:
         if qt_ok:
             from .gui.app import run_window
-            run_window(thread, config, log_path)
+            run_window(thread, config, log_path, recovered=getattr(args, "recovered", False))
         else:
             run_console(thread, operator_address(thread.snapshot(), config.http_port), log_path)
     finally:

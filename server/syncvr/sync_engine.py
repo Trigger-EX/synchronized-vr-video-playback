@@ -322,7 +322,7 @@ class SyncEngine:
         state = self.state
         if state == "playing" and self.pending_start:
             state = "syncing"
-        return {
+        st = {
             "state": state,
             "video": (self.video_msg or {}).get("video"),
             "position": round(self.player.time, 3) if self.player.loaded_video else None,
@@ -334,3 +334,7 @@ class SyncEngine:
             "seek_time_ms": round(self.seek_time * 1000.0),
             "start_latency_ms": round(self.start_latency * 1000.0),
         }
+        if self.anchor is not None:
+            st["anchor"] = {"pos": round(self.anchor["pos"], 3), "at": round(self.anchor["at"], 3),
+                            "loop": bool(self.anchor.get("loop"))}
+        return st

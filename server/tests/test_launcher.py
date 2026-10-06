@@ -123,3 +123,82 @@ def test_server_thread_call(tmp_path):
         t.stop()
     with pytest.raises(RuntimeError):
         t.call(lambda c: 1).result(1)
+
+
+# ---------------------------------------------------------------- supervisor
+
+class FakeProc:
+    def __init__(self, code):
+        self.code = code
+
+    def wait(self):
+        return self.code
+
+
+def run_supervisor(codes, **kw):
+    cmds, sleeps, msgs = [], [], []
+    it = iter(codes)
+
+    def spawn(cmd):
+        cmds.append(cmd)
+        return FakeProc(next(it))
+    now = [0.0]
+    sleep = lambda s: (sleeps.append(s), now.__setitem__(0, now[0] + s))
+    rc = launcher.supervise(["gui", "--http-port", "9"], spawn=spawn, sleep=sleep, clock=lambda: now[0],
+                            say=msgs.append, **kw)
+    return rc, cmds, sleeps, msgs
+
+
+def test_no_restart_after_clean_exit():
+    rc, cmds, sleeps, _ = run_supervisor([0])
+    assert rc == 0 and len(cmds) == 1 and not sleeps
+    assert "--supervised" in cmds[0] and "--recovered" not in cmds[0]
+
+
+def test_restart_after_exit_1_and_signal_with_recovered_flag():
+    rc, cmds, sleeps, _ = run_supervisor([1, -11, 0])
+    assert rc == 0 and len(cmds) == 3
+    assert "--recovered" not in cmds[0] and "--recovered" in cmds[1] and "--recovered" in cmds[2]
+    assert cmds[1][-3:] == ["--http-port", "9", "--supervised"][-3:] or "--http-port" in cmds[1]
+    assert sleeps == [1.0, 2.0]
+
+
+def test_backoff_and_restart_cap():
+    rc, cmds, sleeps, msgs = run_supervisor([1] * 10)
+    assert rc == 1 and len(cmds) == 6  # first run + 5 restarts
+    assert sleeps == [1.0, 2.0, 5.0, 5.0, 5.0]
+    assert "giving up" in msgs[-1]
+
+
+def test_restarts_age_out_of_window(monkeypatch):
+    monkeypatch.setattr(launcher, "RESTART_WINDOW_S", 8.0)  # old crashes expire while backing off
+    rc, cmds, _, _ = run_supervisor([1] * 8 + [0])
+    assert rc == 0 and len(cmds) == 9
+
+
+def test_waits_for_port_before_respawn():
+    busy = iter([True, True, False])
+    sleeps = []
+    procs = iter([FakeProc(1), FakeProc(0)])
+    rc = launcher.supervise(["gui"], port=8080, spawn=lambda c: next(procs), sleep=sleeps.append,
+                            clock=lambda: 0.0, port_busy=lambda p: next(busy), say=lambda m: None)
+    assert rc == 0 and sleeps == [1.0, 0.5, 0.5]
+
+
+def test_env_disable_and_child_flags(monkeypatch):
+    import argparse
+    ns = argparse.Namespace(supervised=False, self_test=False)
+    monkeypatch.delenv("SYNCVR_NO_SUPERVISOR", raising=False)
+    assert launcher.supervisor_enabled(ns)
+    monkeypatch.setenv("SYNCVR_NO_SUPERVISOR", "1")
+    assert not launcher.supervisor_enabled(ns)
+    monkeypatch.delenv("SYNCVR_NO_SUPERVISOR")
+    assert not launcher.supervisor_enabled(argparse.Namespace(supervised=True, self_test=False))
+    assert not launcher.supervisor_enabled(argparse.Namespace(supervised=False, self_test=True))
+
+
+def test_child_command_frozen_and_source(monkeypatch):
+    src = launcher.child_command(["gui", "--console"], recovered=True)
+    assert src[1:4] == ["-m", "syncvr", "gui"] and src[-3:] == ["--console", "--supervised", "--recovered"]
+    monkeypatch.setattr(sys, "frozen", True, raising=False)
+    assert launcher.child_command(["gui", "--console"]) == [sys.executable, "--console", "--supervised"]

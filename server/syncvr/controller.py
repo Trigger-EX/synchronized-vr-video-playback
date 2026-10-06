@@ -11,6 +11,7 @@ should be at any moment.
 
 import asyncio
 import logging
+import statistics
 import time
 import uuid
 from collections import Counter, OrderedDict, defaultdict, deque
@@ -30,6 +31,16 @@ DOWNLOAD_IDLE_GRACE_S = 20.0
 # Pose streaming: the headset stops by itself 15 s after the last pose_stream, so renew well before.
 POSE_STREAM_HZ = 10
 POSE_RENEW_S = 10.0
+
+# Crash recovery: restored desired states older than this are dropped; after a restart the
+# controller waits RECOVERY_WINDOW_S for headsets to report what they are playing.
+STALE_DESIRED_S = 30 * 60.0
+RECOVERY_WINDOW_S = 20.0
+RECOVERY_STATUS_WAIT_S = 3.0
+RECOVERY_GROUP_S = 0.25
+ANCHOR_EQUAL_S = 1e-3
+ANCHOR_SANITY_S = 2.0
+PLAYBACK_ACTIONS = ("load", "play", "pause", "seek", "stop")
 
 
 class CommandError(Exception):
@@ -62,7 +73,7 @@ class Device:
 
     def saved(self) -> dict:
         return {"name": self.name, "group": self.group, "volume": self.volume, "serial": self.serial,
-                "model": self.model, "last_seen": self.last_seen}
+                "model": self.model, "last_seen": self.last_seen, "desired": self.desired}
 
     def to_json(self) -> dict:
         return {
@@ -234,17 +245,33 @@ class Controller:
         self.server_info: Dict[str, Any] = {}
         self.following: Optional[str] = None
         self._renew_handle = None
+        # crash recovery (see _reconcile)
+        self.recovering_until = 0.0
+        self._rec_active = False
+        self._held: Dict[str, float] = {}  # online headsets waiting for their first synced status
+        self._members: set = set()  # headsets reconciled into the recovered show
+        self._cancelled: set = set()  # headsets an operator command took over during recovery
+        self._status_t: Dict[str, float] = {}
+        self._raw: Dict[str, dict] = {}  # what each headset reported, before group snapping
+        self._rec_result: Optional[dict] = None
+        self._rec_timer = None
 
     # ------------------------------------------------------------------ state
 
     def load(self, data: dict) -> None:
         self.settings = validate_settings(data.get("settings", {}), DEFAULT_SYNC_SETTINGS)
+        try:
+            fresh = time.time() - float(data.get("saved_wall", 0.0)) <= STALE_DESIRED_S
+        except (TypeError, ValueError):
+            fresh = False
         for device_id, saved in data.get("devices", {}).items():
             dev = Device(device_id=device_id)
             for key in ("name", "group", "serial", "model"):
                 setattr(dev, key, str(saved.get(key, "")))
             dev.volume = float(saved.get("volume", 1.0))
             dev.last_seen = float(saved.get("last_seen", 0.0))
+            if fresh and isinstance(saved.get("desired"), dict) and saved["desired"].get("mode"):
+                dev.desired = dict(saved["desired"])
             self.devices[device_id] = dev
         self.library.metadata.update(data.get("videos", {}))
         if "max_downloads" in data:
@@ -253,9 +280,18 @@ class Controller:
             if device_id in self.devices:
                 self.distributor.queue[device_id] = {"files": [str(n) for n in job.get("files", [])],
                                                      "delete_others": bool(job.get("delete_others", False))}
+        if data.get("devices"):  # a restart of a populated server: headsets may be mid show
+            self.recovering_until = server_clock() + RECOVERY_WINDOW_S
+            self._rec_active = True
+            self._rec_result = None
+
+    def any_active(self) -> bool:
+        """True while any headset is meant to be playing or paused (drives the periodic save)."""
+        return any(d.desired and d.desired.get("mode") in ("playing", "paused") for d in self.devices.values())
 
     def dump(self) -> dict:
         return {
+            "saved_wall": time.time(),
             "settings": self.settings,
             "max_downloads": self.distributor.max_concurrent,
             "devices": {d.device_id: d.saved() for d in self.devices.values()},
@@ -281,8 +317,10 @@ class Controller:
         self.changed()
 
     def snapshot(self) -> dict:
+        self._recovery_poll()
         return {
-            "server": dict(self.server_info, name=self.server_name, version=__version__, time=server_clock()),
+            "server": dict(self.server_info, name=self.server_name, version=__version__, time=server_clock(),
+                           recovery=self._recovery_json()),
             "settings": self.settings,
             "devices": [d.to_json() for d in self.devices.values()],
             "library": self.library.to_json(),
@@ -325,7 +363,12 @@ class Controller:
             "settings": self.settings,
         })
         self.send(dev, {"type": "volume", "value": dev.volume})
-        self._send_desired(dev)
+        self._recovery_poll()
+        if self._rec_active and device_id not in self._cancelled:
+            self._held[device_id] = server_clock()  # hold desired state until it reports what it is playing
+            self._arm_timer()
+        else:
+            self._send_desired(dev)
         if self.following == device_id:
             self.send(dev, {"type": "pose_stream", "hz": POSE_STREAM_HZ})
         self.log_event("info", f"{dev.label} connected from {dev.ip}", dev)
@@ -338,6 +381,7 @@ class Controller:
         dev.conn = None
         dev.online = False
         dev.pose = None
+        self._held.pop(dev.device_id, None)
         self.dirty = True  # remember when it was last seen
         self.distributor.disconnected(dev.device_id)
         self.log_event("warn", f"{dev.label} disconnected", dev)
@@ -348,6 +392,10 @@ class Controller:
         if kind == "status":
             msg.pop("type")
             dev.status = msg
+            self._status_t[dev.device_id] = server_clock()
+            if dev.device_id in self._held and msg.get("clock_synced"):
+                self._reconcile(dev)
+            self._recovery_poll()
             self.distributor.check_idle(dev.device_id, msg)
             self.changed()
         elif kind == "inventory":
@@ -436,6 +484,8 @@ class Controller:
         targets = self.resolve_targets(params.get("targets"))
         if not targets:
             raise CommandError("no headsets match the selected targets")
+        if action in PLAYBACK_ACTIONS:
+            self._cancel_recovery(targets)
         online = sum(1 for d in targets if d.online)
         result = handler(targets, params) or {}
         self.changed()
@@ -619,6 +669,217 @@ class Controller:
 
     def _act_cancel_downloads(self, targets, params):
         self.distributor.cancel(d.device_id for d in targets)
+
+    # --------------------------------------------------------- crash recovery
+    #
+    # After a restart the server does not know what the headsets are doing, but they
+    # do: they keep playing on their own anchor. So the first synced status of each
+    # headset is adopted as its desired state (instead of re-cueing it), headsets that
+    # are within RECOVERY_GROUP_S of each other are snapped to one anchor, and only
+    # headsets whose state differs from the adopted one are sent anything.
+
+    def _recovery_poll(self) -> None:
+        if not self._rec_active:
+            return
+        now = server_clock()
+        for device_id, t in list(self._held.items()):
+            dev = self.devices.get(device_id)
+            if dev is None or not dev.online:
+                self._held.pop(device_id, None)
+            elif now - t >= RECOVERY_STATUS_WAIT_S:
+                self._reconcile(dev)
+        if now >= self.recovering_until:
+            self._finish_recovery()
+
+    def recovery_tick(self) -> None:
+        self._recovery_poll()
+
+    def _arm_timer(self) -> None:
+        if self._rec_timer is not None:
+            return
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            return  # no event loop (unit tests): the caller ticks by hand
+
+        def fire():
+            self._rec_timer = None
+            self._recovery_poll()
+            if self._rec_active:
+                self._arm_timer()
+        self._rec_timer = loop.call_later(RECOVERY_STATUS_WAIT_S / 2, fire)
+
+    def _cancel_recovery(self, targets: List[Device]) -> None:
+        if not self._rec_active:
+            return
+        for dev in targets:
+            self._cancelled.add(dev.device_id)
+            self._held.pop(dev.device_id, None)
+            self._members.discard(dev.device_id)
+            self._raw.pop(dev.device_id, None)
+        self.dirty = True
+        if all(i in self._cancelled for i in self.devices):
+            self._rec_active = False
+            self._held.clear()
+
+    @staticmethod
+    def _same_anchor(a: dict, b: dict) -> bool:
+        return (abs(float(a["pos"]) - float(b["pos"])) <= ANCHOR_EQUAL_S
+                and abs(float(a["at"]) - float(b["at"])) <= ANCHOR_EQUAL_S
+                and bool(a.get("loop", False)) == bool(b.get("loop", False)))
+
+    def _adopt_playing(self, video: Video, st: dict, t: float) -> dict:
+        anchor = st.get("anchor")
+        position = st.get("position")
+        try:
+            pos, at, loop = float(anchor["pos"]), float(anchor["at"]), bool(anchor.get("loop", False))
+        except (TypeError, KeyError, ValueError):
+            anchor = None
+        if anchor is not None:
+            implied = position_at(self._desired_for(video, "playing", pos, at, loop), t)
+            if st.get("state") == "playing" and position is not None and abs(implied - float(position)) > ANCHOR_SANITY_S:
+                log.warning("anchor of %s implies %.2fs but it reports %.2fs; rebuilding the anchor",
+                            video.name, implied, float(position))
+                anchor = None
+        if anchor is None:
+            ref = st.get("expected")
+            if ref is None:
+                ref = position
+            pos, at, loop = float(ref or 0.0), t, video.loop
+        d = self._desired_for(video, "playing", pos, at, loop)
+        d["pos"], d["at"] = pos, at  # exact copy, no rounding
+        return d
+
+    def _reports(self, dev: Device, d: dict) -> bool:
+        """Does the headset already report the state ``d``?"""
+        st = dev.status
+        if st.get("video") != d["video"]:
+            return False
+        if d["mode"] == "paused":
+            return st.get("state") == "paused"
+        if st.get("state") not in ("playing", "syncing"):
+            return False
+        a = st.get("anchor")
+        if isinstance(a, dict) and "pos" in a and "at" in a:
+            try:
+                return self._same_anchor(a, d)
+            except (TypeError, ValueError):
+                return False
+        ref = st.get("expected")
+        if ref is None:
+            ref = st.get("position")
+        t = self._status_t.get(dev.device_id, server_clock())
+        return ref is not None and abs(position_at(d, t) - float(ref)) <= 0.01
+
+    def _consensus(self) -> Optional[dict]:
+        """What most recovered headsets are doing: the biggest playing cohort, else the biggest paused one."""
+        for mode in ("playing", "paused"):
+            cohorts: Counter = Counter()
+            example: Dict[Any, dict] = {}
+            for i in self._members:
+                d = self.devices[i].desired if i in self.devices else None
+                if d and d.get("mode") == mode:
+                    key = (d["video"], d["pos"], d.get("at"), d.get("loop", False))
+                    cohorts[key] += 1
+                    example.setdefault(key, d)
+            if cohorts:
+                return example[cohorts.most_common(1)[0][0]]
+        return None
+
+    def _regroup(self, dev: Device, now: float) -> List[Device]:
+        """Snap the playing headsets within RECOVERY_GROUP_S of ``dev`` to their median anchor."""
+        mine = dev.desired
+        cands = []
+        for i in self._members:
+            other = self.devices.get(i)
+            d = self._raw.get(i)
+            if other and d and d.get("mode") == "playing" and d["video"] == mine["video"]:
+                cands.append((position_at(d, now), i, other))
+        cands.sort(key=lambda g: (g[0], g[1]))
+        k = next(n for n, g in enumerate(cands) if g[2] is dev)
+        lo = hi = k  # grow the group while neighbours are within RECOVERY_GROUP_S of each other
+        while lo > 0 and cands[lo][0] - cands[lo - 1][0] <= RECOVERY_GROUP_S:
+            lo -= 1
+        while hi < len(cands) - 1 and cands[hi + 1][0] - cands[hi][0] <= RECOVERY_GROUP_S:
+            hi += 1
+        group = cands[lo:hi + 1]
+        if len(group) < 2:
+            return []
+        anchor = self._raw[group[(len(group) - 1) // 2][1]]
+        changed = []
+        for _, _, other in group:
+            if not self._same_anchor(other.desired, anchor):
+                other.desired = dict(anchor)
+                changed.append(other)
+        return changed
+
+    def _reconcile(self, dev: Device) -> None:
+        self._held.pop(dev.device_id, None)
+        if not self._rec_active:
+            self._send_desired(dev)
+            return
+        st = dev.status
+        t = self._status_t.get(dev.device_id, server_clock())
+        now = server_clock()
+        state = st.get("state")
+        video = self.library.get(st.get("video")) if st.get("video") else None
+        saved = dev.desired
+        adopted: Optional[dict] = None
+        if video is not None and state in ("playing", "syncing"):
+            adopted = self._adopt_playing(video, st, t)
+        elif video is not None and state in ("paused", "loading", "ended"):
+            if state != "paused" and saved and saved.get("mode") in ("playing", "paused") \
+                    and saved.get("video") == video.name:
+                adopted = dict(saved)
+            else:
+                pos = st.get("position")
+                adopted = self._desired_for(video, "paused", self._clamp(video, pos or 0.0))
+        if adopted is not None:
+            dev.desired = adopted
+            self._raw[dev.device_id] = adopted
+            self._members.add(dev.device_id)
+            touched = self._regroup(dev, now) if adopted["mode"] == "playing" else []
+            for other in [dev] + [o for o in touched if o is not dev]:
+                if not self._reports(other, other.desired):
+                    self._send_desired(other)
+        else:  # idle: join the show, else fall back to the saved state
+            cons = self._consensus()
+            if cons is not None:
+                dev.desired = dict(cons)
+            if dev.desired and dev.desired.get("mode") in ("playing", "paused"):
+                self._members.add(dev.device_id)
+            self._send_desired(dev)
+        self.dirty = True
+
+    def _finish_recovery(self) -> None:
+        for device_id in list(self._held):
+            dev = self.devices.get(device_id)
+            if dev is not None:
+                self._reconcile(dev)
+        self._held.clear()
+        cons = self._consensus()
+        for dev in self.devices.values():
+            if (not dev.online and dev.device_id not in self._members and dev.device_id not in self._cancelled
+                    and cons is not None and dev.desired and dev.desired.get("mode") in ("playing", "paused")):
+                dev.desired = dict(cons)
+        self._rec_active = False
+        self.dirty = True
+        if self._members and cons is not None:
+            pos = position_at(cons, server_clock())
+            self._rec_result = {"rejoined": len(self._members), "position": round(pos, 2), "video": cons["video"]}
+            self.log_event("info", f"Recovered show: {len(self._members)} headsets rejoined at "
+                                   f"{int(pos) // 60:02d}:{int(pos) % 60:02d} ({cons['video']})")
+        else:
+            self._rec_result = {"rejoined": len(self._members), "position": None, "video": None}
+
+    def _recovery_json(self) -> dict:
+        if self._rec_active:
+            cons = self._consensus()
+            return {"active": True, "rejoined": len(self._members),
+                    "position": round(position_at(cons, server_clock()), 2) if cons else None,
+                    "video": cons["video"] if cons else None}
+        r = self._rec_result or {"rejoined": 0, "position": None, "video": None}
+        return dict(r, active=False)
 
     # ------------------------------------------------------- admin endpoints
 

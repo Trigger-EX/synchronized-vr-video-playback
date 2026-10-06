@@ -92,4 +92,16 @@ class MessagesTest {
         assertEquals("v.mp4", o["video"])
         assertTrue((o["rate"] as Double) in 0.95..1.05)
     }
+
+    @Test fun statusCarriesAnchorOnlyWhileAnchored() {
+        val e = SyncEngine(FakePlayer(), null)
+        assertTrue(Json.parseObject(JsonWriter("status").also { e.writeStatus(it, 0.0) }.toString())!!["anchor"] == null)
+        e.onPlay(VideoCommand(video = "v.mp4", pos = 12.5, at = 3.25, loop = true, duration = 600.0))
+        val o = Json.parseObject(JsonWriter("status").also { e.writeStatus(it, 1.0) }.toString())!!
+        @Suppress("UNCHECKED_CAST")
+        val a = o["anchor"] as Map<String, Any?>
+        assertEquals(12.5, a["pos"])
+        assertEquals(3.25, a["at"])
+        assertEquals(true, a["loop"])
+    }
 }

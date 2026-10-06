@@ -109,3 +109,12 @@ def test_bridge_state_and_command(qapp):
     bridge.close()
     bridge.refresh()
     assert len(states) == 2 and not errors
+
+
+def test_recovered_banner_and_summary(qapp, tmp_path):
+    win = MainWindow(FakeBridge(), Cfg(), tmp_path / "log", recovered=True)
+    assert "restarted after a crash" in win.statusBar().currentMessage()
+    win.on_state({"devices": [], "server": {"recovery": {"active": True, "rejoined": 0}}})
+    assert "Recovered show" not in win.statusBar().currentMessage()
+    win.on_state({"devices": [], "server": {"recovery": {"active": False, "rejoined": 3, "position": 125}}})
+    assert win.statusBar().currentMessage() == "Recovered show: 3 headsets rejoined at 02:05"

@@ -25,7 +25,7 @@ from typing import Optional
 from . import __version__
 from .analysis import sha256_file
 from .protocol import (DEFAULT_DISCOVERY_PORT, DEFAULT_TCP_PORT, PROTOCOL_VERSION, SERVICE_NAME, decode,
-                       encode, is_safe_filename)
+                       encode, is_safe_filename, server_clock)
 from .sync_engine import ClockSync, SyncEngine
 
 log = logging.getLogger(__name__)
@@ -184,7 +184,8 @@ class SimHeadset:
     def __init__(self, index: int, server: Optional[str], port: int = DEFAULT_TCP_PORT,
                  download_dir: Optional[Path] = None, seed: Optional[int] = None,
                  discovery_port: int = DEFAULT_DISCOVERY_PORT, realistic: bool = True,
-                 throttle_bps: Optional[float] = None):
+                 throttle_bps: Optional[float] = None, report_anchor: bool = True):
+        self.report_anchor = report_anchor
         self.index = index
         self.throttle_bps = throttle_bps  # cap on download speed, bytes/s (None = unlimited)
         self.server = server
@@ -231,7 +232,7 @@ class SimHeadset:
         anchor = self.engine.anchor
         if anchor is None or self.engine.state != "playing" or self.engine.pending_start:
             return None
-        expected = anchor["pos"] + (time.monotonic() - anchor["at"])
+        expected = anchor["pos"] + (server_clock() - anchor["at"])
         return self.player.time - expected
 
     def _queue_event(self, level, message):
@@ -348,6 +349,8 @@ class SimHeadset:
 
     def status(self) -> dict:
         st = self.engine.status(self.server_now())
+        if not self.report_anchor:
+            st.pop("anchor", None)
         st.update({
             "type": "status",
             "battery": round(0.8 - self.index * 0.01, 2),
@@ -510,7 +513,8 @@ async def run_fleet(args) -> None:
     headsets = [
         SimHeadset(i + 1, args.server, args.port,
                    Path(args.download_dir) / f"sim{i + 1:03d}" if args.download_dir else None,
-                   discovery_port=args.discovery_port)
+                   discovery_port=args.discovery_port,
+                   report_anchor=not getattr(args, "no_anchor", False))
         for i in range(args.count)
     ]
     tasks = [asyncio.create_task(h.run()) for h in headsets]
@@ -533,4 +537,6 @@ def add_arguments(p: argparse.ArgumentParser) -> None:
     p.add_argument("--port", type=int, default=DEFAULT_TCP_PORT, help="server headset port")
     p.add_argument("--discovery-port", type=int, default=DEFAULT_DISCOVERY_PORT)
     p.add_argument("--count", type=int, default=5, help="number of simulated headsets")
+    p.add_argument("--no-anchor", action="store_true",
+                   help="omit status.anchor, like an old player app")
     p.add_argument("--download-dir", help="where simulated headsets store content (default: temp dirs)")

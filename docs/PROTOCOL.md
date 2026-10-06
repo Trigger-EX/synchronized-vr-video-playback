@@ -48,7 +48,7 @@ object has a `type`. **All times are server-clock seconds** (the server's
 position error, + = ahead), `rate`, `mode`, `seek_time_ms`, `start_latency_ms`,
 `battery` (0–1, -1 unknown), `charging`, `battery_current_a` (amps, + = charging; optional, omitted when unknown), `temp_c`, `worn`, `storage_free`, `wifi_rssi`,
 `volume`, `rtt_ms`, `clock_synced`, `fps`, `download` (`{name, received, total}` or null),
-`error`.
+`error`, `anchor` (`{pos, at, loop}`: the anchor the player follows, in server-clock seconds; present only while anchored, old apps omit it; the server uses it to recover a show after a restart).
 
 ### Server → headset
 

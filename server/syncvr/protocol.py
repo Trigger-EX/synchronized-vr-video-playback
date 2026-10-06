@@ -73,7 +73,44 @@ CORRECTION_MODES = ("rate", "seek", "external")
 
 def server_clock() -> float:
     """The clock every playback schedule is expressed in."""
-    return time.monotonic()
+    return time.monotonic() + _offset
+
+
+_offset = 0.0
+SAME_BOOT_TOLERANCE_S = 2.0
+
+
+def set_clock_offset(offset: float) -> None:
+    global _offset
+    _offset = float(offset)
+
+
+def clock_epoch() -> dict:
+    """Snapshot to persist so a restarted server can continue the same server_clock timeline."""
+    wall, mono = time.time(), time.monotonic()
+    return {"offset": _offset, "wall_minus_mono": wall - mono, "saved_wall": wall,
+            "server_now": mono + _offset}
+
+
+def _num(d: dict, key: str):
+    v = d.get(key)
+    if isinstance(v, bool) or not isinstance(v, (int, float)) or v != v or v in (float("inf"), float("-inf")):
+        return None
+    return float(v)
+
+
+def rebase_clock(saved) -> None:
+    """Restore the clock offset from a saved clock_epoch(); tolerates missing or garbage input."""
+    if not isinstance(saved, dict):
+        return
+    offset, wmm = _num(saved, "offset"), _num(saved, "wall_minus_mono")
+    if offset is not None and wmm is not None and abs((time.time() - time.monotonic()) - wmm) < SAME_BOOT_TOLERANCE_S:
+        set_clock_offset(offset)
+        return
+    server_now, saved_wall = _num(saved, "server_now"), _num(saved, "saved_wall")
+    if server_now is None or saved_wall is None:
+        return
+    set_clock_offset(server_now + (time.time() - saved_wall) - time.monotonic())
 
 
 def encode(msg: dict) -> bytes:
