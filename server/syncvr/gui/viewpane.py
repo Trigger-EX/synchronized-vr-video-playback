@@ -1,6 +1,6 @@
 """Docked pane that embeds the scrcpy window of the selected headset (or notes that it opened separately)."""
 
-from PySide6.QtCore import Qt, QTimer
+from PySide6.QtCore import Qt, QTimer, Signal
 from PySide6.QtGui import QWindow
 from PySide6.QtWidgets import QDockWidget, QLabel, QVBoxLayout, QWidget
 
@@ -14,6 +14,8 @@ def qt_embedder(native_id: int) -> QWidget:
 
 class ViewPane(QDockWidget):
     """`finder(title) -> native id or None` and `embedder(id) -> QWidget` are injectable for tests."""
+
+    fell_back = Signal(str)  # embedding is impossible/failed: scrcpy stays a normal window, the dock goes away
 
     def __init__(self, window, finder, embedder=qt_embedder, can_embed: bool = True):
         super().__init__("Headset view", window)
@@ -48,8 +50,8 @@ class ViewPane(QDockWidget):
     def attach(self) -> None:
         """scrcpy is ready: embed its window, or leave it separate when that is not possible."""
         if not self.can_embed:
-            self.note.setText("Embedding is not available on this display (Wayland or macOS): "
-                              "the view opened in its own window.")
+            self._fall_back("Embedding is not available on this display (Wayland or macOS): "
+                            "the view opened in its own window.")
             return
         self._tries = 0
         self._timer.start()
@@ -59,14 +61,30 @@ class ViewPane(QDockWidget):
         native = self.finder(self.title)
         if native:
             self._timer.stop()
-            self.container = self.embedder(native)
+            try:
+                self.container = self.embedder(native)
+            except Exception:  # foreign window could not be wrapped
+                self._fall_back("Could not dock the view window: it is open separately.")
+                return
+            self.container.setMinimumSize(240, 240)
             self.lay.insertWidget(1, self.container, 1)
             self.note.hide()
         else:
             self._tries += 1
             if self._tries >= FIND_TRIES:
                 self._timer.stop()
-                self.note.setText("Could not dock the view window: it is open separately.")
+                self._fall_back("Could not dock the view window: it is open separately.")
+
+    def _fall_back(self, text: str) -> None:
+        """Leave scrcpy running in its own window, do not show an empty strip."""
+        self.note.setText(text)
+        self.fell_back.emit(text)
+        self.release()
+
+    def release(self) -> None:
+        """Forget the view without stopping scrcpy, and hide the dock."""
+        self.clear()
+        self.hide()
 
     def clear(self) -> None:
         self._timer.stop()

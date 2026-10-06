@@ -60,7 +60,8 @@ class SettingsTab(QWidget):
         self._dirty = set()
         self.editors = {}
         grid = QGridLayout()
-        grid.setHorizontalSpacing(24)
+        grid.setHorizontalSpacing(32)
+        grid.setVerticalSpacing(22)
         for i, spec in enumerate(SETTINGS_SPEC):
             w = make_editor(spec)
             w.setToolTip(spec.help)
@@ -71,6 +72,7 @@ class SettingsTab(QWidget):
             help_label.setWordWrap(True)
             help_label.setObjectName("fieldHelp")
             cell = QVBoxLayout()
+            cell.setSpacing(7)
             cell.addWidget(QLabel(spec.label))
             cell.addWidget(w)
             cell.addWidget(help_label)
@@ -88,6 +90,8 @@ class SettingsTab(QWidget):
         row.addWidget(self.defaults_button)
         row.addStretch(1)
         lay = QVBoxLayout(self)
+        lay.setContentsMargins(20, 18, 20, 18)
+        lay.setSpacing(18)
         lay.addLayout(grid)
         lay.addLayout(row)
         lay.addStretch(1)

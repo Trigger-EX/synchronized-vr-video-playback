@@ -29,7 +29,7 @@ QMainWindow, QDialog, QMessageBox { background: %(bg)s; }
 QWidget#tabPage, QScrollArea, QScrollArea > QWidget > QWidget { background: transparent; }
 QLabel { background: transparent; }
 QLabel[muted="true"], QLabel#muted { color: %(muted)s; }
-QLabel#fieldHelp { color: %(muted)s; font-size: 9pt; }
+QLabel#fieldHelp { color: %(muted)s; font-size: 9pt; padding-top: 2px; line-height: 150%%; }
 QToolTip { background: %(surface2)s; color: %(text)s; border: 1px solid %(border)s; padding: 4px; }
 
 QFrame#topbar { background: %(surface)s; border: 0; border-bottom: 1px solid %(border)s; }

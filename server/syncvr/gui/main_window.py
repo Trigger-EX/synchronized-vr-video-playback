@@ -4,7 +4,7 @@ import time
 from pathlib import Path
 
 from PySide6.QtCore import Qt, QTimer
-from PySide6.QtGui import QAction
+from PySide6.QtGui import QAction, QGuiApplication
 from PySide6.QtWidgets import (QFileDialog, QFrame, QHBoxLayout, QLabel, QMainWindow, QMessageBox, QScrollArea, QSizePolicy, QTabWidget,
                                QVBoxLayout, QWidget)
 
@@ -42,7 +42,8 @@ class MainWindow(QMainWindow):
         self.targets = []  # selected headset ids; empty means every headset
         self.setWindowTitle("SyncVR")
         pane_args = {"embedder": embedder} if embedder else {}
-        self.view_pane = ViewPane(self, finder, can_embed=embed_supported(), **pane_args)
+        self.view_pane = ViewPane(self, finder, can_embed=embed_supported(qt_platform=QGuiApplication.platformName()), **pane_args)
+        self.view_pane.fell_back.connect(lambda text: self.statusBar().showMessage(text, STATUS_MS * 2))
         self.addDockWidget(Qt.RightDockWidgetArea, self.view_pane)
         self.view_pane.visibilityChanged.connect(lambda vis: vis or self.close_view())
         self._grown_by = 0

@@ -71,6 +71,8 @@ def test_start_and_duplicate_guard(env):
     cmd = env.popen[0].cmd
     assert cmd[:3] == ["/bin/scrcpy", "-s", "10.0.0.5:5555"] and "SyncVR - Seat 1" in cmd
     assert "27183:27282" in cmd and "--window-borderless" not in cmd
+    assert cmd[cmd.index("--max-size") + 1] == str(m.MAX_SIZE) == "480" and "--max-fps" in cmd
+    assert "--video-bit-rate" in cmd and "--no-mipmaps" in cmd and "--video-buffer=0" in cmd and "--no-audio" in cmd
     assert not env.mgr.start("a", "10.0.0.5", "Seat 1")
     assert len(env.popen) == 1 and len(env.run) == 1
     env.popen[0].returncode = 0  # window closed: can open again
@@ -130,6 +132,10 @@ def test_launch_gap_ready_and_timeout(env):
 def test_embed_supported():
     assert m.embed_supported({}, "win32") and m.embed_supported({"DISPLAY": ":0"}, "linux")
     assert not m.embed_supported({"XDG_SESSION_TYPE": "wayland"}, "linux") and not m.embed_supported({}, "darwin")
+    assert not m.embed_supported({"DISPLAY": ":0"}, "linux", "wayland")
+    assert not m.embed_supported({"DISPLAY": ":0"}, "linux", "offscreen")
+    xwl = {"XDG_SESSION_TYPE": "wayland", "DISPLAY": ":0"}
+    assert m.embed_supported(xwl, "linux", "xcb")  # Qt on XWayland
 
 
 def make_window(qapp, tmp_path, env, can_embed=True):
@@ -168,7 +174,23 @@ def test_wayland_fallback_note(qapp, tmp_path, env):
     assert "--window-borderless" not in env.popen[0].cmd
     env.mgr._procs["a"].ready.set()
     env.mgr.poll()
-    assert not embedded and "own window" in win.view_pane.note.text()
+    assert not embedded
+    assert not win.view_pane.isVisible() and win.view_pane.device_id is None  # no empty strip
+    assert "own window" in win.statusBar().currentMessage()
+    assert not env.popen[0].terminated  # scrcpy keeps running as its own window
+    win.close()
+
+
+def test_embed_failure_falls_back(qapp, tmp_path, env):
+    win, found, embedded = make_window(qapp, tmp_path, env)
+    def boom(i):
+        raise RuntimeError("no")
+    win.view_pane.embedder = boom
+    win.view_headset("a")
+    env.mgr._procs["a"].ready.set()
+    env.mgr.poll()
+    assert not win.view_pane.isVisible() and "open separately" in win.statusBar().currentMessage()
+    assert not env.popen[0].terminated
     win.close()
 
 

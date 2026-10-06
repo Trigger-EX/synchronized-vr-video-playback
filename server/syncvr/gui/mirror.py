@@ -31,6 +31,10 @@ INSTALL_HELP = (
 
 # Single left-eye region of the Go's side-by-side mirror (width:height:x:y), from the old Headjack panel.
 EYE_CROP = "1224:1232:0:104"
+# Keep the mirror light: small frames, capped rate and bitrate, no render buffering or mipmaps.
+MAX_SIZE = 480
+MAX_FPS = 30
+VIDEO_BIT_RATE = "2M"
 
 
 def _exe_name(name: str) -> str:
@@ -67,10 +71,19 @@ def session_is_wayland(env=None, platform: str = "") -> bool:
         or bool(env.get("WAYLAND_DISPLAY") and not env.get("DISPLAY")))
 
 
-def embed_supported(env=None, platform: str = "") -> bool:
-    """scrcpy's window can be docked on Windows and X11; Wayland and macOS get a separate window."""
+def embed_supported(env=None, platform: str = "", qt_platform: str = "") -> bool:
+    """scrcpy's window can be docked when both it and Qt are X11 clients (Linux, also via XWayland) or on Windows.
+    Qt on native Wayland, offscreen, a Wayland session without XWayland, and macOS get a separate window."""
+    env = os.environ if env is None else env
     platform = platform or sys.platform
-    return platform == "win32" or (platform.startswith("linux") and not session_is_wayland(env, platform))
+    if platform == "win32":
+        return True
+    if not platform.startswith("linux"):
+        return False
+    wayland = session_is_wayland(env, platform)
+    if (qt_platform or ("wayland" if wayland else "xcb")) != "xcb":
+        return False
+    return bool(env.get("DISPLAY")) or not wayland
 
 
 def find_native_window(title: str) -> Optional[int]:
@@ -170,12 +183,15 @@ class MirrorManager:
                           % (serial, stderr_tail(out) or "(no output)"))
             return False
         cmd = [scrcpy, "-s", serial, "--port", PORT_RANGE, "--window-title", self.title(name or device_id),
-               "--max-size", "640", "--no-audio", "--stay-awake"]
+               "--max-size", str(MAX_SIZE), "--max-fps", str(MAX_FPS),
+               "--video-bit-rate", VIDEO_BIT_RATE, "--no-audio", "--no-mipmaps", "--video-buffer=0", "--stay-awake"]
         if not self.full_feed:
             cmd += ["--crop", EYE_CROP]
         if embed:
             cmd.append("--window-borderless")
         env = dict(os.environ, ADB=adb, SDL_VIDEO_X11_WMCLASS=WM_CLASS, SDL_VIDEO_WAYLAND_WMCLASS=WM_CLASS)
+        if embed and sys.platform.startswith("linux"):
+            env["SDL_VIDEODRIVER"] = "x11"  # a native Wayland window cannot be reparented into Qt's X11 dock
         if self._last_launch is not None:
             self._sleep(max(0.0, LAUNCH_GAP - (self._clock() - self._last_launch)))
         try:
