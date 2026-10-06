@@ -4,14 +4,15 @@ from __future__ import annotations
 
 import logging
 import os
+import time
 from typing import Callable, Optional, Protocol
 
 from PySide6.QtCore import QObject, QTimer, Signal
 from PySide6.QtGui import QImage
 from PySide6.QtWidgets import QVBoxLayout, QWidget
 
-from . import proxy as proxymod
 from .localsync import LocalSync
+from .mediatune import TARGET_FPS, FrameGate, FrameStats, configure_hwdec
 
 try:  # needs PySide6-Addons / OpenGL support
     from .sphereview import SphereView
@@ -31,6 +32,7 @@ class MediaBackend(Protocol):
     """What LocalPlayer needs from a player. Callbacks are set by LocalPlayer after construction."""
     on_error: Optional[Callable[[str], None]]
     on_frame: Optional[Callable[[QImage], None]]
+    wants_frames: Optional[Callable[[], bool]]  # False (window hidden/minimised) => skip frame conversion
 
     def load(self, path: str) -> None: ...
     def play(self) -> None: ...
@@ -43,11 +45,19 @@ class MediaBackend(Protocol):
 
 class QtMediaBackend:
     def __init__(self, video: bool = True):
+        hw = configure_hwdec()  # before the multimedia plugin loads
         from PySide6.QtCore import QUrl
         from PySide6.QtMultimedia import QAudioOutput, QMediaPlayer, QVideoSink
         self._url = QUrl
         self.on_error = None
         self.on_frame = None
+        self.wants_frames = None
+        self._gate = FrameGate(TARGET_FPS)
+        self._stats = FrameStats()
+        self._pending = None  # newest frame dropped by the gate, converted when its slot comes
+        self._timer_armed = False
+        self._first_frame = True
+        self._log_environment(hw, video)
         self._player = QMediaPlayer()
         self._audio = QAudioOutput()
         self._player.setAudioOutput(self._audio)
@@ -67,14 +77,86 @@ class QtMediaBackend:
             return False, "QtMultimedia is not installed (%s)" % MEDIA_HINT
         return True, ""
 
+    def _log_environment(self, hw: str, video: bool) -> None:
+        try:
+            from PySide6 import __version__ as pyside_version
+            from PySide6.QtCore import qVersion
+            log.info("local playback: Qt %s (PySide6 %s), multimedia backend %s, HW decode %s, %s mode",
+                     qVersion(), pyside_version, os.environ.get("QT_MEDIA_BACKEND") or "default (ffmpeg on Qt>=6.5)",
+                     hw or "Qt default", "video" if video else "audio-only (no video sink)")
+        except Exception:  # noqa: BLE001
+            log.debug("local playback: cannot log Qt environment", exc_info=True)
+
+    def _log_media(self) -> None:
+        try:
+            from PySide6.QtMultimedia import QMediaMetaData
+            md = self._player.metaData()
+            size = md.value(QMediaMetaData.Key.Resolution)
+            codec = md.value(QMediaMetaData.Key.VideoCodec)
+            fps = md.value(QMediaMetaData.Key.VideoFrameRate)
+            tracks = len(self._player.videoTracks())
+            log.info("local playback: media %s, video codec %s, %s fps, %d video track(s)",
+                     "%dx%d" % (size.width(), size.height()) if size is not None and hasattr(size, "width") else "?",
+                     getattr(codec, "name", codec), fps, tracks)
+        except Exception:  # noqa: BLE001
+            log.debug("local playback: media metadata unavailable", exc_info=True)
+
     def _frame(self, frame) -> None:
-        if not self.on_frame or not frame.isValid():
+        if not self.on_frame:
             return
+        if self.wants_frames is not None and not self.wants_frames():
+            self._pending = None  # hidden/minimised: no conversion work at all
+            self._count(False)
+            return
+        wait = self._gate.wait(time.monotonic())
+        if wait > 0:
+            self._pending = frame  # keep only the newest; converted when the slot opens
+            self._count(False)
+            if not self._timer_armed:
+                self._timer_armed = True
+                QTimer.singleShot(int(wait * 1000) + 1, self._flush)
+            return
+        self._pending = None
+        self._convert(frame)
+
+    def _flush(self) -> None:
+        self._timer_armed = False
+        frame, self._pending = self._pending, None
+        if frame is None or not self.on_frame:
+            return
+        if self.wants_frames is not None and not self.wants_frames():
+            return
+        wait = self._gate.wait(time.monotonic())
+        if wait > 0:  # slot not open yet (timer fired early)
+            self._pending = frame
+            self._timer_armed = True
+            QTimer.singleShot(int(wait * 1000) + 1, self._flush)
+            return
+        self._convert(frame)
+
+    def _count(self, converted: bool, seconds: float = 0.0) -> None:
+        text = self._stats.add(time.monotonic(), converted, seconds)
+        if text:
+            log.debug("local playback: %s", text)
+
+    def _convert(self, frame) -> None:
+        if not frame.isValid():
+            return
+        if self._first_frame:
+            self._first_frame = False
+            try:
+                log.info("local playback: first frame %dx%d pixel format %s handle %s",
+                         frame.width(), frame.height(), getattr(frame.pixelFormat(), "name", frame.pixelFormat()),
+                         getattr(frame.handleType(), "name", frame.handleType()))
+            except Exception:  # noqa: BLE001
+                pass
+        t0 = time.monotonic()
         try:
             img = frame.toImage()
         except Exception as e:  # noqa: BLE001
             self._report("cannot convert video frame: %s" % e)
             return
+        self._count(True, time.monotonic() - t0)
         if img.isNull():
             self._report("video frame could not be converted to an image")
             return
@@ -87,6 +169,8 @@ class QtMediaBackend:
 
     def _status(self, status) -> None:
         log.info("local playback: media status %s", getattr(status, "name", status))
+        if getattr(status, "name", "") == "LoadedMedia":
+            self._log_media()
         if getattr(status, "name", "") == "InvalidMedia":
             self._report("invalid media (unsupported codec/container?)")
 
@@ -96,6 +180,8 @@ class QtMediaBackend:
             self.on_error(text or "media playback error")
 
     def load(self, path):
+        self._first_frame, self._pending = True, None
+        self._gate.reset()
         self._player.setSource(self._url.fromLocalFile(path))
 
     def play(self):
@@ -144,11 +230,8 @@ class LocalPlayer(QObject):
     error = Signal(str)
     windowClosed = Signal()
     poseReceived = Signal(object)
-    _proxyProgress = Signal(str, float)
-    _proxyDone = Signal(str, str, str)  # source, proxy path or '', error
 
-    def __init__(self, bridge, content_dir, server_now, backend_factory=None, view_factory=None, parent=None,
-                 proxy_job_factory=None):
+    def __init__(self, bridge, content_dir, server_now, backend_factory=None, view_factory=None, parent=None):
         super().__init__(parent)
         self._bridge = bridge
         self._content_dir = content_dir
@@ -158,15 +241,6 @@ class LocalPlayer(QObject):
         self._injected = backend_factory is not None
         self._view_injected = view_factory is not None
         self._sync = LocalSync()
-        self._job_factory = proxy_job_factory or proxymod.default_job_factory
-        self._job = None
-        self._job_src: Optional[str] = None
-        self._proxies: dict = {}  # original path -> ready proxy path
-        self._proxy_failed: set = set()
-        self._loaded_src: Optional[str] = None
-        self._using_proxy = False
-        self._proxyProgress.connect(self._on_proxy_progress)
-        self._proxyDone.connect(self._on_proxy_done)
         self.mode: Optional[str] = None
         self.backend = None
         self.window: Optional[LocalPlayerWindow] = None
@@ -220,6 +294,7 @@ class LocalPlayer(QObject):
         if mode == "video":
             self._ensure_window()
             self.backend.on_frame = self._on_frame
+            self.backend.wants_frames = self._window_visible
             self.window.show()
         self._timer.start()
         self._apply_follow()
@@ -251,36 +326,26 @@ class LocalPlayer(QObject):
         pos = self.backend.position() if self._loaded else None
         p = self._sync.step(self._snapshot, self._focus or "", self._server_now(), self._content_dir, pos)
         if p["mode"] == "stop":
-            self._halt(keep_job=True)  # a stopped headset must not abandon the laptop copy being prepared
+            self._halt()
             self._failed = None
             return
         if "error" in p:
             self._fail(p["error"], p["error"])
             return
-        src = p["path"]
-        if src == self._failed:
+        path = p["path"]
+        if path == self._failed:
             return
-        if self._job is not None and src != self._job_src:
-            self._cancel_proxy()
-        path = src
-        if src == self._loaded_src and self._loaded:
-            path = self._loaded
-        elif self.mode == "video":
-            path = self._resolve_proxy(src)
-            if path is None:
-                return  # laptop copy still being prepared
         if path != self._loaded:
             self._failed = None
             self.backend.stop()
             self.backend.load(path)
-            self._loaded, self._loaded_src, self._state = path, src, "stopped"
-            self._using_proxy = path != src
+            self._loaded, self._state = path, "stopped"
             self._frames = 0
             self._no_frame_timer.stop()
             p["seek"] = True
             self._sync.reset()
             self._sync.step(self._snapshot, self._focus or "", self._server_now(), self._content_dir, None)
-            self._update_view(os.path.basename(src))
+            self._update_view(os.path.basename(path))
         if p["seek"]:
             self.backend.seek(p["target_pos"])
         if p["mode"] == "play" and self._state != "playing":
@@ -304,7 +369,14 @@ class LocalPlayer(QObject):
         if self.window is not None:
             self.window.view.set_frame(image)
 
+    def _window_visible(self) -> bool:
+        w = self.window
+        return w is not None and w.isVisible() and not w.isMinimized()
+
     def _check_frames(self) -> None:
+        if not self._window_visible():  # hidden/minimised windows legitimately receive no frames
+            self._no_frame_timer.start()
+            return
         if self._frames == 0 and self._state == "playing" and self._loaded:
             self._show_error(NO_FRAME_TEXT)
 
@@ -318,82 +390,13 @@ class LocalPlayer(QObject):
         self._set_status(text)
         self.error.emit(text)
 
-    # ----------------------------------------------------------- laptop copy
-
-    def _resolve_proxy(self, src: str) -> Optional[str]:
-        """Path to play for `src` in video mode: the cached proxy, the original (no proxy needed or
-        possible), or None while the proxy is being made."""
-        if src in self._proxies and os.path.isfile(self._proxies[src]):
-            return self._proxies[src]
-        if src in self._proxy_failed:
-            return src
-        name = os.path.basename(src)
-        v = next((x for x in (self._snapshot or {}).get("library") or [] if x.get("name") == name), None) or {}
-        plan = proxymod.proxy_plan(v.get("width"), v.get("height"), v.get("projection"), v.get("stereo"))
-        if plan is None:
-            return src
-        dst = proxymod.cache_path(self._content_dir, name, v.get("size") or os.path.getsize(src),
-                                  v.get("mtime") or os.path.getmtime(src), plan)
-        if dst.is_file():
-            self._proxies[src] = str(dst)
-            return str(dst)
-        if self._job_src == src:
-            return None
-        self._cancel_proxy()
-        probe = v.get("probe") or {}
-        fps = (probe.get("video") or {}).get("fps")
-        acodec = (probe.get("audio") or {}).get("codec")
-        args = proxymod.ffmpeg_args(src, dst, plan, fps, acodec)
-        log.info("local playback: preparing laptop copy %s -> %dx%d", name, plan[0], plan[1])
-        self._set_status("Preparing laptop copy\u2026 0%")
-        self._job_src = src
-        try:
-            self._job = self._job_factory(
-                args, dst, v.get("duration"),
-                lambda pct, s=src: self._proxyProgress.emit(s, pct),
-                lambda out, err, s=src: self._proxyDone.emit(s, out or "", err or ""))
-            self._job.start()
-        except Exception as e:  # noqa: BLE001
-            self._job, self._job_src = None, None
-            self._proxy_unavailable(src, str(e))
-            return src
-        return None
-
-    def _cancel_proxy(self) -> None:
-        job, self._job, self._job_src = self._job, None, None
-        if job is not None:
-            job.cancel()
-
-    def _proxy_unavailable(self, src: str, why: str) -> None:
-        self._proxy_failed.add(src)
-        log.error("local playback: laptop copy failed (%s)", why)
+    def _halt(self) -> None:
         self._set_status("")
-        self.error.emit("Laptop copy failed (%s); playing the original file" % why)
-
-    def _on_proxy_progress(self, src: str, pct: float) -> None:
-        if src == self._job_src:
-            self._set_status("Preparing laptop copy\u2026 %d%%" % int(pct))
-
-    def _on_proxy_done(self, src: str, out: str, err: str) -> None:
-        if src != self._job_src:
-            return
-        self._job, self._job_src = None, None
-        if out:
-            self._proxies[src] = out
-            self._set_status("")
-        else:
-            self._proxy_unavailable(src, err or "unknown error")
-        self.tick()
-
-    def _halt(self, keep_job: bool = False) -> None:
-        if not keep_job:
-            self._cancel_proxy()
-            self._set_status("")
         self._no_frame_timer.stop()
         self._frames = 0
         if self._loaded or self._state != "stopped":
             self.backend.stop()
-        self._loaded, self._loaded_src, self._state = None, None, "stopped"
+        self._loaded, self._state = None, "stopped"
 
     def _fail(self, key: str, text: str) -> None:
         if self._failed == key:
@@ -404,7 +407,7 @@ class LocalPlayer(QObject):
 
     def _backend_error(self, text: str) -> None:
         name = os.path.basename(self._loaded or "") or "video"
-        self._fail(self._loaded_src or self._loaded or text, "Cannot play %s on this computer: %s" % (name, text))
+        self._fail(self._loaded or text, "Cannot play %s on this computer: %s" % (name, text))
 
     # ------------------------------------------------------------------ view
 
@@ -422,11 +425,10 @@ class LocalPlayer(QObject):
         if self.window is None:
             return
         v = next((x for x in (self._snapshot or {}).get("library") or [] if x.get("name") == name), None) or {}
-        stereo = "mono" if self._using_proxy else v.get("stereo")  # the laptop copy is left eye only
-        key = (v.get("projection"), stereo, v.get("rotation"))
+        key = (v.get("projection"), v.get("stereo"), v.get("rotation"))
         if key != self._view_key:
             self._view_key = key
-            self.window.view.set_view(v.get("projection") or "360", stereo or "mono",
+            self.window.view.set_view(v.get("projection") or "360", v.get("stereo") or "mono",
                                       v.get("rotation") or 0.0)
 
     def _on_window_closed(self) -> None:
@@ -453,8 +455,6 @@ class LocalPlayer(QObject):
 
     def _teardown(self) -> None:
         self._timer.stop()
-        self._cancel_proxy()
-        self._proxies.clear()
         self._no_frame_timer.stop()
         self._frames = 0
         if self._follow:
@@ -463,6 +463,8 @@ class LocalPlayer(QObject):
         self._pose_timer.stop()
         if self.backend is not None:
             self.backend.on_frame = self.backend.on_error = None
+            if hasattr(self.backend, "wants_frames"):
+                self.backend.wants_frames = None
             self.backend.close()
             self.backend = None
         if self.window is not None:
@@ -470,8 +472,6 @@ class LocalPlayer(QObject):
             self.window.close()
             self.window.deleteLater()
             self.window = None
-        self._loaded, self._loaded_src, self._failed, self._state, self._view_key = None, None, None, "stopped", None
-        self._using_proxy = False
-        self._proxy_failed.clear()
+        self._loaded, self._failed, self._state, self._view_key = None, None, "stopped", None
         self._sync.reset()
         self.mode = None

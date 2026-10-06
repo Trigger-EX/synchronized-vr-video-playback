@@ -17,7 +17,7 @@ from PySide6.QtOpenGLWidgets import QOpenGLWidget
 from . import projection as proj
 
 log = logging.getLogger(__name__)
-MAX_TEX_W = 2048  # frames (5120x2560 HEVC...) are downscaled on the CPU to this width before upload
+MAX_TEX_W = 1920  # frames (5120x2560 HEVC...) are downscaled once on the CPU to this width before upload
 
 _VERT = """
 attribute vec2 pos;
@@ -75,6 +75,7 @@ class SphereView(QOpenGLWidget):
         self._small: QImage | None = None  # downscaled copy used for both GL upload and CPU painting
         self._dirty = False
         self._tex: QOpenGLTexture | None = None
+        self._tex_size = (0, 0)
         self._prog: QOpenGLShaderProgram | None = None
         self._vao = None
         self._vbo = None
@@ -113,7 +114,10 @@ class SphereView(QOpenGLWidget):
         self.update()
 
     def set_pose(self, yaw: float, pitch: float, roll: float = 0.0) -> None:
-        self._yaw, self._pitch, self._roll = float(yaw), max(-90.0, min(90.0, float(pitch))), float(roll)
+        pose = (float(yaw), max(-90.0, min(90.0, float(pitch))), float(roll))
+        if pose == (self._yaw, self._pitch, self._roll):
+            return  # nothing to repaint
+        self._yaw, self._pitch, self._roll = pose
         self.update()
 
     def set_fov(self, fov: float) -> None:
@@ -205,15 +209,26 @@ class SphereView(QOpenGLWidget):
             img = img.scaledToWidth(MAX_TEX_W, Qt.FastTransformation)
         self._small = img
         if self.failed is None:
-            if self._tex is not None:
-                self._tex.destroy()
-                self._tex = None
-            tex = QOpenGLTexture(img.convertToFormat(QImage.Format_RGBA8888), QOpenGLTexture.DontGenerateMipMaps)
-            if not tex.isCreated():
-                raise RuntimeError("texture creation failed for %dx%d image" % (img.width(), img.height()))
-            tex.setMinMagFilters(QOpenGLTexture.Linear, QOpenGLTexture.Linear)
-            tex.setWrapMode(QOpenGLTexture.ClampToEdge)
-            self._tex = tex
+            self._upload(img)
+
+    def _upload(self, img: QImage) -> None:
+        rgba = img if img.format() == QImage.Format_RGBA8888 else img.convertToFormat(QImage.Format_RGBA8888)
+        size = (rgba.width(), rgba.height())
+        if self._tex is not None and self._tex_size == size:
+            try:  # same storage: just refill it, no texture destroy/create per frame
+                self._tex.setData(0, QOpenGLTexture.RGBA, QOpenGLTexture.UInt8, rgba.constBits())
+                return
+            except Exception:  # noqa: BLE001
+                log.debug("SphereView: texture refill failed, recreating", exc_info=True)
+        if self._tex is not None:
+            self._tex.destroy()
+            self._tex = None
+        tex = QOpenGLTexture(rgba, QOpenGLTexture.DontGenerateMipMaps)
+        if not tex.isCreated():
+            raise RuntimeError("texture creation failed for %dx%d image" % size)
+        tex.setMinMagFilters(QOpenGLTexture.Linear, QOpenGLTexture.Linear)
+        tex.setWrapMode(QOpenGLTexture.ClampToEdge)
+        self._tex, self._tex_size = tex, size
 
     def paintGL(self):
         try:

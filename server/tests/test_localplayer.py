@@ -171,78 +171,14 @@ def test_frame_cancels_no_frame_watch(env):
     assert views[0].log[-1][0] == "frame"
 
 
-class FakeJob:
-    jobs = []
 
-    def __init__(self, args, dst, duration, on_progress, on_done):
-        self.args, self.dst, self.on_progress, self.on_done = args, dst, on_progress, on_done
-        self.started = self.cancelled = False
-        FakeJob.jobs.append(self)
-
-    def start(self): self.started = True
-    def cancel(self): self.cancelled = True
-
-
-def big_snap(**kw):
-    s = snap(**kw)
-    s["library"] = [{"name": "a.mp4", "projection": "360", "stereo": "mono", "rotation": 0.0,
-                     "width": 5120, "height": 2560, "duration": 60}]
-    return s
-
-
-def make_lp(tmp_path, backends, views):
-    (tmp_path / "a.mp4").write_bytes(b"x")
-    FakeJob.jobs = []
-    def bf(video):
-        backends.append(FakeBackend(video)); return backends[-1]
-    def vf():
-        views.append(FakeView()); return views[-1]
-    return LocalPlayer(FakeBridge(), tmp_path, lambda: 1000.0, bf, vf, proxy_job_factory=FakeJob)
-
-
-def test_proxy_prepared_then_played_as_mono(qapp, tmp_path):
-    backends, views = [], []
-    lp = make_lp(tmp_path, backends, views)
-    FakeView.set_status = lambda self, t: self.log.append(("status", t))
-    lp.update(big_snap(), "a")
+def test_no_frame_watch_ignores_hidden_window(env):
+    lp, _, backends, views, errors = env
+    lp.update(snap(), "a")
     lp.set_mode("video")
-    job = FakeJob.jobs[0]
-    assert job.started and not any(c[0] == "load" for c in backends[0].calls)
-    job.on_progress(42.0)
-    assert ("status", "Preparing laptop copy… 42%") in views[0].log
-    out = tmp_path / ".laptop" / "a-1-0-crf21-4608x2304.mp4"
-    out.parent.mkdir(); out.write_bytes(b"p")
-    job.on_done(str(out), None)
-    assert ("load", str(out)) in backends[0].calls and ("play",) in backends[0].calls
-    assert ("view", "360", "mono", 0.0) in views[0].log
-    lp.tick()
-    assert len(FakeJob.jobs) == 1
-    lp.stop()
-
-
-def test_proxy_failure_falls_back_to_original(qapp, tmp_path):
-    backends, views = [], []
-    lp = make_lp(tmp_path, backends, views)
-    errs = []
-    lp.error.connect(errs.append)
-    lp.update(big_snap(), "a")
-    lp.set_mode("video")
-    FakeJob.jobs[0].on_done(None, "ffmpeg not found")
-    assert ("load", str(tmp_path / "a.mp4")) in backends[0].calls and errs
-    lp.stop()
-
-
-def test_proxy_cancelled_when_stopped_and_audio_skips(qapp, tmp_path):
-    backends, views = [], []
-    lp = make_lp(tmp_path, backends, views)
-    lp.update(big_snap(), "a")
-    lp.set_mode("video")
-    lp.update(big_snap(mode="stopped"), "a")
-    lp.tick()
-    assert not FakeJob.jobs[0].cancelled  # headset stopped: the laptop copy keeps being prepared
-    lp.stop()
-    assert FakeJob.jobs[0].cancelled
-    lp.update(big_snap(), "a")
-    lp.set_mode("audio")
-    assert len(FakeJob.jobs) == 1 and ("load", str(tmp_path / "a.mp4")) in backends[-1].calls
+    assert backends[0].wants_frames() is True
+    lp.window.hide()
+    assert backends[0].wants_frames() is False
+    lp._check_frames()
+    assert not errors
     lp.stop()

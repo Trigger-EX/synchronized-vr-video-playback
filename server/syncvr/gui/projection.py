@@ -110,7 +110,3 @@ def flat_rect(eye_aspect_ratio: float, widget_w: float, widget_h: float) -> tupl
     w, h = (ww, ww / a) if ww / wh <= a else (wh * a, wh)
     return ((ww - w) / 2, (wh - h) / 2, w, h)
 
-
-# Go panel: 1280 px per eye across ~100 deg => pixels per degree the headset can show.
-LOCAL_VIEW_PX = 960  # pop-out window width: the 100 deg view is shown across this many px
-GO_PPD = LOCAL_VIEW_PX / FOV_DEFAULT
