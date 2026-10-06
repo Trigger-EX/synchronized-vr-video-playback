@@ -45,6 +45,9 @@ class MainWindow(QMainWindow):
         self.view_pane = ViewPane(self, finder, can_embed=embed_supported(), **pane_args)
         self.addDockWidget(Qt.RightDockWidgetArea, self.view_pane)
         self.view_pane.visibilityChanged.connect(lambda vis: vis or self.close_view())
+        self._grown_by = 0
+        self.view_pane.visibilityChanged.connect(self._make_room)
+        self.view_pane.topLevelChanged.connect(lambda _f: self._make_room(self.view_pane.isVisible()))
         self.resize(1100, 760)
         self.setMinimumSize(560, 360)
 
@@ -110,7 +113,16 @@ class MainWindow(QMainWindow):
             act.triggered.connect(lambda _checked=False, h=handler: h())
             file_menu.addAction(act)
 
-        file_menu.insertAction(file_menu.actions()[-1], view_act)
+        pop_act = QAction("&Pop out headset view", self, checkable=True)
+        pop_act.toggled.connect(self.view_pane.setFloating)
+        self.view_pane.topLevelChanged.connect(pop_act.setChecked)
+        self.pop_action = pop_act
+        feed_act = QAction("Show &both eyes (full feed)", self, checkable=True)
+        feed_act.setChecked(self.mirror.full_feed)
+        feed_act.toggled.connect(self.set_full_feed)
+        self.feed_action = feed_act
+        for act in (view_act, pop_act, feed_act):
+            file_menu.insertAction(file_menu.actions()[-1], act)
         toolbar = self.addToolBar("Headset")
         toolbar.setObjectName("toolbar")
         toolbar.addAction(view_act)
@@ -160,6 +172,22 @@ class MainWindow(QMainWindow):
         embed = self.view_pane.can_embed
         if self.mirror.start(device_id, dev.get("ip") or "", name, embed):
             self.view_pane.begin(device_id, name, self.mirror.title(name))
+
+    def _make_room(self, visible: bool) -> None:
+        """Docking the view widens the window by its width (and gives it back), so nothing is covered."""
+        want = self.view_pane.width() + 8 if visible and not self.view_pane.isFloating() else 0
+        if want == self._grown_by or self.isMaximized() or self.isFullScreen():
+            self._grown_by = want if (self.isMaximized() or self.isFullScreen()) else self._grown_by
+            return
+        self.resize(self.width() + want - self._grown_by, self.height())
+        self._grown_by = want
+
+    def set_full_feed(self, full: bool) -> None:
+        self.mirror.full_feed = full
+        device_id = self.view_pane.device_id
+        if device_id:  # restart the open view with the new crop
+            self.close_view()
+            self.view_headset(device_id)
 
     def close_view(self) -> None:
         device_id = self.view_pane.device_id

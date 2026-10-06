@@ -170,3 +170,26 @@ def test_wayland_fallback_note(qapp, tmp_path, env):
     env.mgr.poll()
     assert not embedded and "own window" in win.view_pane.note.text()
     win.close()
+
+
+def test_single_eye_crop_by_default_and_full_feed_toggle(monkeypatch):
+    from syncvr.gui import mirror as m
+    seen = []
+
+    class P:
+        stdout = iter(())
+        def poll(self): return None
+        def terminate(self): pass
+        def wait(self, timeout=None): return 0
+        def kill(self): pass
+
+    mgr = m.MirrorManager(sleep=lambda s: None)
+    mgr.tool = lambda n: "/bin/" + n
+    monkeypatch.setattr(m.subprocess, "run", lambda *a, **k: type("R", (), {"returncode": 0, "stdout": "connected to x", "stderr": ""})())
+    monkeypatch.setattr(m.subprocess, "Popen", lambda cmd, **k: seen.append(cmd) or P())
+    mgr.start("a", "1.2.3.4")
+    mgr.stop("a")
+    mgr.full_feed = True
+    mgr.start("a", "1.2.3.4")
+    assert "--crop" in seen[0] and m.EYE_CROP in seen[0]
+    assert "--crop" not in seen[1]

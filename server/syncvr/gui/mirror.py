@@ -29,6 +29,10 @@ INSTALL_HELP = (
 )
 
 
+# Single left-eye region of the Go's side-by-side mirror (width:height:x:y), from the old Headjack panel.
+EYE_CROP = "1224:1232:0:104"
+
+
 def _exe_name(name: str) -> str:
     return name + ".exe" if sys.platform == "win32" and not name.endswith(".exe") else name
 
@@ -122,6 +126,7 @@ class MirrorManager:
         self.on_error = on_error or (lambda title, message: None)
         self.on_ready = on_ready or (lambda device_id: None)
         self.tools_dir = tools_dir or ""
+        self.full_feed = False  # False: one eye only (the cropped region, as in the old Headjack panel)
         self._clock, self._sleep = clock, sleep
         self._last_launch = None
         self._procs: Dict[str, _Entry] = {}
@@ -165,7 +170,11 @@ class MirrorManager:
                           % (serial, stderr_tail(out) or "(no output)"))
             return False
         cmd = [scrcpy, "-s", serial, "--port", PORT_RANGE, "--window-title", self.title(name or device_id),
-               "--max-size", "640", "--no-audio", "--stay-awake"] + (["--window-borderless"] if embed else [])
+               "--max-size", "640", "--no-audio", "--stay-awake"]
+        if not self.full_feed:
+            cmd += ["--crop", EYE_CROP]
+        if embed:
+            cmd.append("--window-borderless")
         env = dict(os.environ, ADB=adb, SDL_VIDEO_X11_WMCLASS=WM_CLASS, SDL_VIDEO_WAYLAND_WMCLASS=WM_CLASS)
         if self._last_launch is not None:
             self._sleep(max(0.0, LAUNCH_GAP - (self._clock() - self._last_launch)))
