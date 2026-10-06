@@ -14,7 +14,7 @@ Rect = tuple[float, float, float, float]  # (u0, v0, u1, v1)
 Mat3 = tuple[tuple[float, float, float], tuple[float, float, float], tuple[float, float, float]]
 Vec3 = tuple[float, float, float]
 
-FOV_MIN, FOV_MAX, FOV_DEFAULT = 30.0, 110.0, 80.0
+FOV_MIN, FOV_MAX, FOV_DEFAULT = 30.0, 100.0, 100.0  # Oculus Go is ~100 deg
 
 
 def norm_projection(projection: str | None) -> str:

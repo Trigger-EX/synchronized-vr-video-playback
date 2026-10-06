@@ -248,12 +248,12 @@ class SphereView(QOpenGLWidget):
         if self._vao is not None:
             self._vao.bind()
         self._tex.bind()
-        p.setUniformValue1i(p.uniformLocation("tex"), 0)
-        p.setUniformValue1i(p.uniformLocation("mode"), mode)
-        p.setUniformValue1f(p.uniformLocation("tanHalf"), math.tan(math.radians(self._fov) / 2))
-        p.setUniformValue1f(p.uniformLocation("aspect"), w / h)
-        p.setUniformValue4f(p.uniformLocation("eye"), *r)
-        p.setUniformValue4f(p.uniformLocation("flatRect"), fx / w, 1 - (fy + fh) / h, fw / w, fh / h)
+        p.setUniformValue(p.uniformLocation("tex"), int(0))
+        p.setUniformValue(p.uniformLocation("mode"), int(mode))
+        p.setUniformValue(p.uniformLocation("tanHalf"), float(math.tan(math.radians(self._fov) / 2)))
+        p.setUniformValue(p.uniformLocation("aspect"), float(w / h))
+        p.setUniformValue(p.uniformLocation("eye"), *[float(v) for v in r])
+        p.setUniformValue(p.uniformLocation("flatRect"), fx / w, 1 - (fy + fh) / h, fw / w, fh / h)
         for i in range(3):
             p.setUniformValue(p.uniformLocation("viewR%d" % i), float(m[i][0]), float(m[i][1]), float(m[i][2]))
         self._vbo.bind()
