@@ -21,6 +21,8 @@ class ViewPane(QDockWidget):
         super().__init__("Headset view", window)
         self.setObjectName("viewPane")
         self.setAllowedAreas(Qt.RightDockWidgetArea)
+        # no pop-out: re-parenting the dock destroys the embedded scrcpy window and kills scrcpy
+        self.setFeatures(QDockWidget.DockWidgetClosable)
         self.finder, self.embedder, self.can_embed = finder, embedder, can_embed
         self.device_id = None
         self.title = ""

@@ -189,7 +189,7 @@ class MirrorManager:
             cmd += ["--crop", EYE_CROP]
         if embed:
             cmd.append("--window-borderless")
-        env = dict(os.environ, ADB=adb, SDL_VIDEO_X11_WMCLASS=WM_CLASS, SDL_VIDEO_WAYLAND_WMCLASS=WM_CLASS)
+        env = dict(os.environ, ADB=adb, ANDROID_SERIAL=serial, SDL_VIDEO_X11_WMCLASS=WM_CLASS, SDL_VIDEO_WAYLAND_WMCLASS=WM_CLASS)
         if embed and sys.platform.startswith("linux"):
             env["SDL_VIDEODRIVER"] = "x11"  # a native Wayland window cannot be reparented into Qt's X11 dock
         if self._last_launch is not None:
