@@ -24,6 +24,7 @@ import com.syncvr.player.core.OverlayInput
 import com.syncvr.player.core.PanelText
 import com.syncvr.player.core.PlayerController
 import com.syncvr.player.core.PlayerHost
+import com.syncvr.player.core.Pose
 import com.syncvr.player.core.ViewSpec
 import com.syncvr.player.core.PlayerInfo
 import com.syncvr.player.core.TelemetryCache
@@ -256,6 +257,10 @@ class MainActivity : Activity(), SurfaceHolder.Callback, PlayerHost {
             telemetry = telemetry::get,
             // The render thread publishes "VR on, 72.0 fps" as its status text.
             fps = { if (handle != 0L) FrameRate.parse(NativeBridge.nativeGetStatus(handle)) else null },
+            poseSource = {
+                if (handle == 0L) null
+                else NativeBridge.nativeGetPose(handle).let { Pose(it[0].toDouble(), it[1].toDouble(), it[2].toDouble()) }
+            },
         )
         val ctl = controller!!
         val cal = CalibrationPersistence(ctl.engine, PrefsCalibrationStore(this), { LocalClock.now })

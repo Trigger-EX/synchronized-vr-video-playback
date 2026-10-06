@@ -40,6 +40,7 @@ object has a `type`. **All times are server-clock seconds** (the server's
 | `inventory` | `files: [{name, size}]` | after connecting and whenever local files change |
 | `status` | see below | every second |
 | `downloads_finished` | `ok: [names]`, `failed: [names]`, `cancelled`, `job` (echoed from `sync_content`; absent from older apps) | end of a `sync_content` job |
+| `pose` | `yaw`, `pitch`, `roll` (degrees, relative to the recentered front; yaw + = left, pitch + = up) | only while a `pose_stream` lease is active, at the requested rate; the server stores it silently (no dashboard refresh) |
 | `event` | `level` (`info`/`warn`/`error`), `message` | noteworthy things (shown in the operator window log) |
 
 `status` fields: `state` (`idle`, `loading`, `ready`, `playing`, `syncing`, `paused`,
@@ -57,6 +58,7 @@ position error, + = ahead), `rate`, `mode`, `seek_time_ms`, `start_latency_ms`,
 | `time_pong` | `id`, `t0` (echoed), `ts` (server clock) | reply to `time_ping`, sent immediately |
 | `settings` | `settings` | sync tuning changed in the operator window |
 | `device_info` | `device_name`, `group` | headset renamed |
+| `pose_stream` | `hz` | start streaming `pose` at `hz` (capped at 30); renews a 15 s auto-off lease, so the server resends about every 10 s. `hz` <= 0 stops. Used by the operator's "follow headset view" |
 | `play` | `video`, `projection`, `stereo`, `rotation`, `duration`, `pos`, `at`, `loop` | be at `pos` at server time `at` and keep playing (loads the video if needed; joins late if `at` has passed) |
 | `pause` | same, `at` = when to pause | at `at`, pause and show exactly `pos` (also used to load a video and hold it) |
 | `view` | `video`, `projection`, `stereo`, `rotation` | the operator changed how this video is displayed; apply it to the loaded video `video` immediately without seeking or pausing (ignore if another video is loaded). `play`/`pause` always carry the current values too |

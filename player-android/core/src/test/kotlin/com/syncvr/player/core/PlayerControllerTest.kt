@@ -63,6 +63,35 @@ class PlayerControllerTest {
         telemetry = { null },
     )
 
+    private var pose: Pose? = Pose(90.0, -10.0, 0.0)
+    private val poseCtl = PlayerController(
+        player, content, clock, inbox, { sent.add(it) }, { connected }, host, { t },
+        poseSource = { pose },
+    )
+
+    private fun poses() = sentOfType("pose")
+
+    @Test fun poseOnlyWhileStreamActive() {
+        poseCtl.tick()
+        assertEquals(0, poses().size)
+        inbox.add(msg("""{"type":"pose_stream","hz":10}""")); poseCtl.tick()
+        assertEquals(1, poses().size)
+        assertEquals(90.0, poses()[0]["yaw"])
+        assertEquals(-10.0, poses()[0]["pitch"])
+        t += 0.05; poseCtl.tick()
+        assertEquals(1, poses().size)  // rate limited
+        t += 0.1; poseCtl.tick()
+        assertEquals(2, poses().size)
+        t += 16.0; poseCtl.tick()  // lease ran out
+        assertEquals(2, poses().size)
+    }
+
+    @Test fun poseStreamZeroStops() {
+        inbox.add(msg("""{"type":"pose_stream","hz":10}""")); poseCtl.tick()
+        inbox.add(msg("""{"type":"pose_stream","hz":0}""")); t += 1.0; poseCtl.tick()
+        assertEquals(1, poses().size)
+    }
+
     @AfterTest fun cleanup() { dir.deleteRecursively() }
 
     private fun msg(json: String) = ServerMessage.parse(json)!!

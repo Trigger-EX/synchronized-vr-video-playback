@@ -9,6 +9,7 @@ rejoins the show in sync, because an anchor fully determines where playback
 should be at any moment.
 """
 
+import asyncio
 import logging
 import time
 import uuid
@@ -25,6 +26,10 @@ log = logging.getLogger(__name__)
 # How long a headset may go without reporting a download before its job stops counting
 # toward the concurrent-download limit (the job itself is kept until the headset says it is done).
 DOWNLOAD_IDLE_GRACE_S = 20.0
+
+# Pose streaming: the headset stops by itself 15 s after the last pose_stream, so renew well before.
+POSE_STREAM_HZ = 10
+POSE_RENEW_S = 10.0
 
 
 class CommandError(Exception):
@@ -49,6 +54,7 @@ class Device:
     inventory: Dict[str, int] = field(default_factory=dict)
     desired: Optional[Dict[str, Any]] = None
     conn: Any = None
+    pose: Optional[Dict[str, float]] = None  # latest {yaw,pitch,roll,t}; deliberately not in to_json
 
     @property
     def label(self) -> str:
@@ -226,6 +232,8 @@ class Controller:
         self._listeners: List[Callable[[], None]] = []
         self.dirty = False
         self.server_info: Dict[str, Any] = {}
+        self.following: Optional[str] = None
+        self._renew_handle = None
 
     # ------------------------------------------------------------------ state
 
@@ -318,6 +326,8 @@ class Controller:
         })
         self.send(dev, {"type": "volume", "value": dev.volume})
         self._send_desired(dev)
+        if self.following == device_id:
+            self.send(dev, {"type": "pose_stream", "hz": POSE_STREAM_HZ})
         self.log_event("info", f"{dev.label} connected from {dev.ip}", dev)
         self.distributor.pump()
         return dev
@@ -327,6 +337,7 @@ class Controller:
             return  # superseded by a newer connection
         dev.conn = None
         dev.online = False
+        dev.pose = None
         self.dirty = True  # remember when it was last seen
         self.distributor.disconnected(dev.device_id)
         self.log_event("warn", f"{dev.label} disconnected", dev)
@@ -343,6 +354,12 @@ class Controller:
             files = msg.get("files") or []
             dev.inventory = {str(f["name"]): int(f.get("size", 0)) for f in files if isinstance(f, dict) and "name" in f}
             self.changed()
+        elif kind == "pose":
+            try:
+                dev.pose = {"yaw": float(msg["yaw"]), "pitch": float(msg["pitch"]),
+                            "roll": float(msg.get("roll", 0.0)), "t": time.monotonic()}
+            except (KeyError, TypeError, ValueError):
+                pass  # no changed(): poses arrive ~10 Hz and must not wake the dashboard
         elif kind == "downloads_finished":
             if not msg.get("cancelled"):  # a cancelled job's slot was already freed
                 self.distributor.finished(dev.device_id, msg)
@@ -352,6 +369,45 @@ class Controller:
                            f"{dev.label}: {msg.get('message', '')}", dev)
         else:
             log.debug("ignoring %s from %s", kind, dev.label)
+
+    # ------------------------------------------------------------------- pose
+
+    def follow(self, device_id: str) -> None:
+        """Ask one headset to stream its view direction; renewed every POSE_RENEW_S until unfollow()."""
+        if device_id != self.following:
+            self._stop_stream()
+        self.following = device_id
+        self._renew()
+
+    def unfollow(self) -> None:
+        self._stop_stream()
+        self.following = None
+
+    def _stop_stream(self) -> None:
+        if self._renew_handle is not None:
+            self._renew_handle.cancel()
+            self._renew_handle = None
+        dev = self.devices.get(self.following) if self.following else None
+        if dev is not None:
+            self.send(dev, {"type": "pose_stream", "hz": 0})
+            dev.pose = None
+
+    def _renew(self) -> None:
+        if self._renew_handle is not None:
+            self._renew_handle.cancel()
+            self._renew_handle = None
+        dev = self.devices.get(self.following) if self.following else None
+        if dev is None:
+            return
+        self.send(dev, {"type": "pose_stream", "hz": POSE_STREAM_HZ})
+        try:
+            self._renew_handle = asyncio.get_running_loop().call_later(POSE_RENEW_S, self._renew)
+        except RuntimeError:
+            pass  # no event loop (unit tests): caller renews by hand
+
+    def pose_of(self, device_id: str) -> Optional[dict]:
+        dev = self.devices.get(device_id)
+        return dict(dev.pose) if dev is not None and dev.pose else None
 
     # --------------------------------------------------------------- commands
 

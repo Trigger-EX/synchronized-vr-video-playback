@@ -49,7 +49,10 @@ class PlayerController(
     private val statusIntervalSeconds: Double = 1.0,
     /** Frames per second for the status message, or null when unknown. */
     private val fps: () -> Double? = { null },
+    /** Head orientation for the operator's `pose_stream`; null = this app cannot report one. */
+    private val poseSource: PoseSource? = null,
 ) {
+    private val poseStream = PoseStream()
     private val events = ConcurrentLinkedQueue<String>()
     val engine = SyncEngine(player, ::queueEvent)
 
@@ -70,6 +73,7 @@ class PlayerController(
         val t = localNow()
         if (clock.synced) engine.update(clock.serverTime(t))
         flush()
+        if (connected() && poseStream.due(t)) poseSource?.pose()?.let { send(poseJson(it)) }
         if (connected() && t >= nextStatus) {
             nextStatus = t + statusIntervalSeconds
             send(statusJson(t))
@@ -119,11 +123,18 @@ class PlayerController(
                 host.setVolume(volume)
             }
             "recenter" -> host.recenter()
+            "pose_stream" -> if (poseSource != null) poseStream.request(m.hz, localNow()) else poseStream.stop()
             "message" -> host.showMessage(m.text, m.seconds)
             "identify" -> host.identify(if (m.name.isNullOrEmpty()) deviceName else m.name, if (m.seconds > 0) m.seconds else 8.0)
             else -> content.handle(m) // sync_content, cancel_downloads, delete_content; others ignored
         }
     }
+
+    private fun poseJson(p: Pose) = JsonWriter("pose")
+        .field("yaw", Math.rint(p.yaw * 10.0) / 10.0)
+        .field("pitch", Math.rint(p.pitch * 10.0) / 10.0)
+        .field("roll", Math.rint(p.roll * 10.0) / 10.0)
+        .toString()
 
     private fun statusJson(localTime: Double): String {
         val w = JsonWriter("status")

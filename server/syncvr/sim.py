@@ -10,6 +10,7 @@ downloads content over HTTP.
 
 import argparse
 import asyncio
+import math
 import json
 import logging
 import os
@@ -214,6 +215,9 @@ class SimHeadset:
         self.job = None  # id of the current sync_content job, echoed in downloads_finished
         self._ping_id = 0
         self._pending_events = []
+        self._pose_hz = 0.0
+        self._pose_until = 0.0
+        self._pose_next = 0.0
         self.messages = []  # everything received, for tests
 
     # ------------------------------------------------------------ helpers
@@ -322,7 +326,20 @@ class SimHeadset:
             for ev in self._pending_events:
                 self.send(ev)
             self._pending_events.clear()
+            self._pose_tick()
             await asyncio.sleep(1.0 / TICK_HZ)
+
+    def pose(self, now: Optional[float] = None) -> dict:
+        now = time.monotonic() if now is None else now
+        return {"type": "pose", "yaw": round((now * 15.0 + self.index * 40.0) % 360.0, 1),
+                "pitch": round(10.0 * math.sin(now * 0.5), 1), "roll": 0.0}
+
+    def _pose_tick(self) -> None:
+        now = time.monotonic()
+        if self._pose_hz <= 0 or now > self._pose_until or now < self._pose_next:
+            return
+        self._pose_next = now + 1.0 / self._pose_hz
+        self.send(self.pose(now))
 
     async def _reporter(self) -> None:
         while True:
@@ -370,6 +387,10 @@ class SimHeadset:
             self.engine.on_pause(msg)
         elif kind == "stop":
             self.engine.on_stop()
+        elif kind == "pose_stream":
+            hz = float(msg.get("hz", 0) or 0)
+            self._pose_hz = max(0.0, min(hz, 30.0))
+            self._pose_until = time.monotonic() + 15.0
         elif kind == "volume":
             self.volume = float(msg.get("value", 1.0))
         elif kind == "sync_content":

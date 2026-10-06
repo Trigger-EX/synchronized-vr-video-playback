@@ -103,6 +103,9 @@ data class ServerMessage(
     // volume
     val value: Double = 0.0,
 
+    // pose_stream
+    val hz: Double = 0.0,
+
     // message, identify
     val text: String? = null,
     val name: String? = null,
@@ -139,6 +142,7 @@ data class ServerMessage(
                 at = o.dbl("at"),
                 loop = o.bool("loop"),
                 value = o.dbl("value"),
+                hz = o.dbl("hz"),
                 text = o.str("text"),
                 name = o.str("name"),
                 seconds = o.dbl("seconds"),

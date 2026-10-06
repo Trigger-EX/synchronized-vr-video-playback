@@ -75,6 +75,15 @@ JNIEXPORT void JNICALL Java_com_syncvr_player_NativeBridge_nativeRecenter(JNIEnv
     if (syncvr::App* app = FromHandle(handle)) app->Recenter();
 }
 
+JNIEXPORT jfloatArray JNICALL Java_com_syncvr_player_NativeBridge_nativeGetPose(JNIEnv* env, jclass,
+                                                                               jlong handle) {
+    float pose[3] = {0.0f, 0.0f, 0.0f};
+    if (syncvr::App* app = FromHandle(handle)) app->GetPose(pose);
+    jfloatArray out = env->NewFloatArray(3);
+    if (out != nullptr) env->SetFloatArrayRegion(out, 0, 3, pose);
+    return out;
+}
+
 JNIEXPORT void JNICALL Java_com_syncvr_player_NativeBridge_nativeSetPanelProminent(
     JNIEnv*, jclass, jlong handle, jboolean prominent) {
     if (syncvr::App* app = FromHandle(handle)) app->SetPanelProminent(prominent == JNI_TRUE);

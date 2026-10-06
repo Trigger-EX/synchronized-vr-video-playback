@@ -167,6 +167,12 @@ void App::SetVideoAspect(float aspect) {
     if (aspect > 0.1f && aspect < 10.0f) videoAspect_.store(aspect);
 }
 
+void App::GetPose(float out[3]) const {
+    out[0] = poseYawDeg_.load();
+    out[1] = posePitchDeg_.load();
+    out[2] = poseRollDeg_.load();
+}
+
 void App::Recenter() {
     recenterRequested_.store(true);
 }
@@ -534,6 +540,19 @@ void App::RunFrame(JNIEnv* env) {
     if (recenterRequested_.exchange(false)) {
         yaw_ = HeadYaw(rawTracking);
         LOGI("Recenter: yaw %.1f degrees", yaw_ * 57.29578f);
+    }
+    {
+        // Pose for the operator's pose_stream: yaw like HeadYaw() (layers.cpp), minus the recenter
+        // yaw; pitch/roll from the same quaternion. UNVERIFIED: signs, not tested on hardware.
+        const ovrQuatf& q = rawTracking.HeadPose.Pose.Orientation;
+        const float kDeg = 57.29578f;
+        float yawDeg = (HeadYaw(rawTracking) - yaw_) * kDeg;
+        while (yawDeg > 180.0f) yawDeg -= 360.0f;
+        while (yawDeg < -180.0f) yawDeg += 360.0f;
+        const float fy = 2.0f * (q.w * q.x - q.y * q.z);  // y of the forward vector (-Z rotated by q)
+        poseYawDeg_.store(yawDeg);
+        posePitchDeg_.store(asinf(fy < -1.0f ? -1.0f : (fy > 1.0f ? 1.0f : fy)) * kDeg);
+        poseRollDeg_.store(atan2f(2.0f * (q.x * q.y + q.w * q.z), 1.0f - 2.0f * (q.x * q.x + q.z * q.z)) * kDeg);
     }
     // Everything drawn is fixed to the recentered direction (cylinder layers and the sphere).
     const ovrTracking2 tracking = RecenteredTracking(rawTracking, yaw_);

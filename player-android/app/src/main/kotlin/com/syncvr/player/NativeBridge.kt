@@ -31,6 +31,9 @@ object NativeBridge {
     /** Operator recenter: the current head direction becomes the front. */
     @JvmStatic external fun nativeRecenter(handle: Long)
 
+    /** [yaw, pitch, roll] in degrees, relative to the recentered front. */
+    @JvmStatic external fun nativeGetPose(handle: Long): FloatArray
+
     /** Larger, centred panel while an operator message or identify banner is up. */
     @JvmStatic external fun nativeSetPanelProminent(handle: Long, prominent: Boolean)
 

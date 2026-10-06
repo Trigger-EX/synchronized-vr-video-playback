@@ -46,6 +46,10 @@ public:
     void SetVideoAspect(float aspect);
     // Operator "recenter": the next frame's head direction becomes the front of all content.
     void Recenter();
+
+    // Latest head orientation (degrees, relative to the recentered front) for the operator's
+    // pose_stream; written by the render thread each frame. Any thread. UNVERIFIED on hardware.
+    void GetPose(float out[3]) const;
     // Larger panel for operator messages.
     void SetPanelProminent(bool prominent);
     std::string GetStatus();
@@ -87,6 +91,7 @@ private:
     std::atomic<bool> recenterRequested_{false};
     std::atomic<bool> panelProminent_{false};
     float yaw_ = 0.0f;  // render thread only
+    std::atomic<float> poseYawDeg_{0.0f}, posePitchDeg_{0.0f}, poseRollDeg_{0.0f};
 
     std::mutex statusMutex_;
     std::string status_ = "starting";

@@ -100,6 +100,27 @@ class Bridge(QObject):
     def set_max_downloads(self, value: int) -> None:
         self._run("set_max_downloads", lambda c: c.set_max_downloads(value))
 
+    def follow(self, device_id: str) -> None:
+        """Start streaming this headset's view direction (renewed by the server until unfollow)."""
+        self._run("follow", lambda c: c.follow(device_id))
+
+    def unfollow(self) -> None:
+        self._run("unfollow", lambda c: c.unfollow())
+
+    def pose(self, device_id: str, cb) -> None:
+        """Call cb(latest {yaw,pitch,roll,t} or None) from the server thread (not the GUI thread:
+        forward it through a Signal). Does not emit result/failed and never marks state dirty."""
+        fut = self._thread.call(lambda c: c.pose_of(device_id))
+
+        def done(f):
+            try:
+                value = f.result()
+            except Exception:
+                value = None
+            if not self._closed:
+                cb(value)
+        fut.add_done_callback(done)
+
     def rescan(self) -> None:
         self._run("rescan", _rescan)
 

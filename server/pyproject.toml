@@ -12,6 +12,7 @@ dependencies = ["aiohttp>=3.8"]
 [project.optional-dependencies]
 test = ["pytest>=7", "pytest-asyncio>=0.21"]
 gui = ["PySide6-Essentials>=6.5"]
+media = ["PySide6-Addons>=6.5"]
 
 [project.scripts]
 syncvr = "syncvr.__main__:main"
