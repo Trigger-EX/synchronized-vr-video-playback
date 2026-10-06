@@ -2,7 +2,7 @@
 
 from PySide6.QtCore import QAbstractTableModel, QModelIndex, Qt
 from PySide6.QtGui import QBrush, QColor
-from PySide6.QtWidgets import (QAbstractItemView, QComboBox, QHBoxLayout, QHeaderView, QLabel, QPushButton,
+from PySide6.QtWidgets import (QAbstractItemView, QComboBox, QHBoxLayout, QHeaderView, QLabel, QMessageBox, QPushButton,
                                QSpinBox, QStyledItemDelegate, QTableView, QVBoxLayout, QWidget)
 
 from . import format as fmt
@@ -122,6 +122,10 @@ class LibraryModel(QAbstractTableModel):
             lines.append("SHA-256 " + v["sha256"])
         return "\n".join(lines)
 
+    def details(self, row) -> str:
+        v = self.videos[row]
+        return self._tooltip(v, CHECKS) or "Not analysed yet."
+
     def display_on_headsets(self, row) -> str:
         return "%d / %d" % (self.counts.get(self.videos[row]["name"], 0), self.total)
 
@@ -206,6 +210,7 @@ class LibraryTab(QWidget):
         for col in (PROJECTION, STEREO):
             self.table.setItemDelegateForColumn(col, ChoiceDelegate(self.table))
         self.table.setItemDelegateForColumn(ROTATION, RotationDelegate(self.table))
+        self.table.clicked.connect(self._show_checks)
         self.table.setColumnWidth(TITLE, 200)
         self.table.setColumnWidth(FILE, 260)
         for col in (PROJECTION, STEREO):
@@ -229,6 +234,12 @@ class LibraryTab(QWidget):
         lay.addWidget(self.table, 1)
         window.bridge.failed.connect(lambda _msg: self.reload())
         self.update_state()
+
+    def _show_checks(self, index) -> None:
+        if index.column() != CHECKS:
+            return
+        name = self.model.videos[index.row()]["name"]
+        QMessageBox.information(self, "Checks: " + name, self.model.details(index.row()))
 
     def editing(self) -> bool:
         return self.table.state() == QAbstractItemView.EditingState
