@@ -48,3 +48,11 @@ Risks: 2:1 can be 360 mono or 180 SBS (filename token decides); native changes u
 - Server `gui/format.py`: `wifi_percent(dbm)=clamp(2*(dbm+100),0,100)`; `wifi_class(pct)` >=70 good, >=50 meh, else poor; `fmt_current` "%+.2f A"; `current_class` meh when charging <0.3 A and battery <100%; `device_info` shows "wifi NN%" and the current entry when present.
 - Also: `sim.py` simulated field, `docs/PROTOCOL.md`, tests (TelemetryTest, PlayerControllerTest, test_gui_format, test_gui_headsets).
 - Risk: some kernels report mA not µA; verify on a real Go.
+
+## Operator local playback (video+audio, audio-only, follow headset view)
+
+- Engine: QtMultimedia (QMediaPlayer/QAudioOutput/QVideoSink) from PySide6-Addons, lazy import; checkboxes greyed with tooltip if unavailable. New extra `media = ["PySide6-Addons>=6.5"]`; packaging/syncvr.spec stops excluding QtMultimedia/QtOpenGL/QtOpenGLWidgets; CI installs `./server[gui,media]`.
+- Sync: laptop follows the snapshot's desired state of the focus headset (PlaybackPanel.focus_device) like a headset does; seek only when drift > 200 ms, 1.5 s cooldown.
+- Pose: separate `pose_stream` (server->player, hz, auto-off after 15 s w/o renewal) and `pose` (player->server: yaw,pitch,roll deg) messages; server stores pose without `changed()`; `follow(device_id)` renews every 10 s; bridge.pose(device_id, cb).
+- Packages: P0 packaging; P1 gui/localsync.py (no Qt); P2 gui/projection.py (no Qt) + gui/sphereview.py (QOpenGLWidget); P3 gui/localplayer.py (MediaBackend, QtMediaBackend, LocalPlayerWindow, injected fakes); P4 playback.py 3 checkboxes (all off; video/audio-only exclusive; follow needs video) + main_window.py wiring; P5 player PoseStream.kt + PlayerController + native yaw; P6 controller.py/bridge.py/sim.py pose.
+- Deferred: rate nudging, BT latency offset, laptop volume link, stereo 3D on laptop.
