@@ -89,6 +89,10 @@ The native player has run on hardware (see the status table below).
    **±10 s**, the seek bar and **Play from start** all stay in sync.
 5. Watch the **drift** figure on each card: under ~20 ms is normal.
 
+## Download the app (no Python needed)
+
+Go to the repository's **Releases** page and open the release tagged `desktop-<branch>` (e.g. `desktop-main`; rolling prerelease rebuilt by CI on each push), or for a versioned build the release for a `v*` tag. Download the asset for your OS: `SyncVR-linux-x86_64.tar.gz`, `SyncVR-windows-x86_64.zip` or `SyncVR-macos-arm64.zip`, extract it and run `SyncVR`. `tools/get-desktop.sh` (Linux/macOS) and `tools\get-desktop.ps1` (Windows) do the download and install for you. The bundles include media support (laptop playback), nothing more to install.
+
 ## Desktop app (recommended)
 
 CI builds a self-contained app for Linux (x86_64), Windows and macOS (Apple silicon / arm64 only) and
@@ -111,9 +115,10 @@ tools\get-desktop.ps1           # Windows (PowerShell): installs into %USERPROFI
 Double-click instead of using a terminal: `Start SyncVR.desktop` (Linux; on Linux Mint's Nemo, right-click > Properties > Permissions > "Allow executing file as program", then choose
 "Trust and launch" the first time, or run `./start-syncvr.sh`) `Start SyncVR.pyw` (Windows; WSL users
 should start it from Windows, not from inside WSL) or `Start SyncVR.command` (macOS; right-click > Open the
-first time). The first run creates `server/.venv` and downloads aiohttp and PySide6 incl. the media add-on (~300 MB; needs internet,
+first time). The first run creates `server/.venv` and downloads aiohttp and PySide6 (~100 MB core; needs internet,
 and on Mint `sudo apt install python3-venv`; if the window fails to start, `sudo apt install libxcb-cursor0`). It runs the server and shows
 a native operator window (headsets, library, settings, log, playback controls) and the "Operator app address" to type into the Android operator app. Content goes in `server/content`, logs in `server/data/logs/syncvr.log`.
+Laptop playback (QtMultimedia) is an optional ~200 MB add-on: click **Install media support** next to the playback checkboxes, then restart SyncVR (the desktop app bundle already includes it).
 Without PySide6 or a display it runs in the terminal instead (`SYNCVR_NO_VENV=1` skips the venv). Starting it a
 second time while port 8080 is taken shows a message and exits. Optional settings go in
 `server/data/launcher.json` (`content`, `http_port`, `name`, `password`).

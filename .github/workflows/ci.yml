@@ -3,6 +3,7 @@ name: CI
 on:
   push:
     branches-ignore: ["apk/**"]
+    tags: ["v*"]
   pull_request:
 
 jobs:
@@ -119,7 +120,7 @@ jobs:
   # Self-contained desktop app (PyInstaller onedir), built natively on each OS and published as an
   # asset of the rolling prerelease desktop-<branch> (fetched with tools/get-desktop.sh|.ps1).
   desktop:
-    if: github.event_name == 'push' && github.ref_type == 'branch'
+    if: github.event_name == 'push' && (github.ref_type == 'branch' || startsWith(github.ref, 'refs/tags/v'))
     needs: server
     permissions:
       contents: write # creates/updates the desktop-<branch> release
@@ -169,7 +170,18 @@ jobs:
             ditto -c -k --keepParent dist/SyncVR.app "${{ matrix.asset }}"
           fi
           ls -l "${{ matrix.asset }}"
+      - name: Publish to release for the v* tag
+        if: github.ref_type == 'tag'
+        shell: bash
+        run: |
+          if ! gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
+            gh release create "$GITHUB_REF_NAME" --verify-tag --title "SyncVR $GITHUB_REF_NAME" \
+              --notes "Desktop apps for $GITHUB_REF_NAME." \
+              || gh release view "$GITHUB_REF_NAME" >/dev/null  # another matrix job may have created it first
+          fi
+          gh release upload "$GITHUB_REF_NAME" "${{ matrix.asset }}" --clobber
       - name: Publish to release desktop-<branch>
+        if: github.ref_type == 'branch'
         shell: bash
         run: |
           tag="desktop-${GITHUB_REF_NAME//\//-}"

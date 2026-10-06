@@ -14,7 +14,9 @@ from typing import List, Optional
 SERVER_DIR = Path(__file__).resolve().parent.parent
 VENV_DIR = SERVER_DIR / ".venv"
 STAMP_NAME = ".syncvr-deps"
-REQUIREMENTS = ["aiohttp>=3.8", "PySide6-Essentials>=6.5", "PySide6-Addons>=6.5"]
+MEDIA_STAMP_NAME = ".syncvr-media"
+REQUIREMENTS = ["aiohttp>=3.8", "PySide6-Essentials>=6.5"]  # core
+MEDIA_REQUIREMENTS = ["PySide6-Addons>=6.5"]  # optional, installed later from the GUI (install_media)
 
 
 def venv_python(venv: Path = VENV_DIR, gui_exe: Optional[bool] = None) -> Path:
@@ -27,8 +29,17 @@ def venv_python(venv: Path = VENV_DIR, gui_exe: Optional[bool] = None) -> Path:
     return venv / "bin" / "python"
 
 
-def _stamp_text() -> str:
-    return "\n".join(REQUIREMENTS) + "\n"
+def media_installed(venv: Path = VENV_DIR) -> bool:
+    return (Path(venv) / MEDIA_STAMP_NAME).exists()
+
+
+def _requirements(venv: Path = VENV_DIR) -> List[str]:
+    """Core requirements, plus the media add-on once it was installed into this venv."""
+    return REQUIREMENTS + (MEDIA_REQUIREMENTS if media_installed(venv) else [])
+
+
+def _stamp_text(venv: Path = VENV_DIR) -> str:
+    return "\n".join(_requirements(venv)) + "\n"
 
 
 def needs_install(venv: Path = VENV_DIR) -> bool:
@@ -37,7 +48,7 @@ def needs_install(venv: Path = VENV_DIR) -> bool:
     if not venv_python(venv, gui_exe=False).exists():
         return True
     try:
-        return (venv / STAMP_NAME).read_text(encoding="utf-8") != _stamp_text()
+        return (venv / STAMP_NAME).read_text(encoding="utf-8") != _stamp_text(venv)
     except OSError:
         return True
 
@@ -54,16 +65,49 @@ def _create_venv(venv: Path) -> bool:
         return False
 
 
-def _pip_install(py: Path) -> bool:
-    cmd = [str(py), "-m", "pip", "install", "--disable-pip-version-check"] + REQUIREMENTS
+def _pip_install(py: Path, requirements: Optional[List[str]] = None, quiet: bool = False) -> bool:
+    cmd = [str(py), "-m", "pip", "install", "--disable-pip-version-check"] + (requirements or REQUIREMENTS)
     kwargs = {}
-    if sys.platform.startswith("win"):
-        kwargs["creationflags"] = getattr(subprocess, "CREATE_NEW_CONSOLE", 0)  # visible progress under pythonw
-    print("Installing SyncVR dependencies (first run, ~100 MB). No Python? tools/get-desktop.sh|.ps1 installs the ready-made desktop app instead.")
+    if quiet:  # called from the GUI: no console window, output captured
+        kwargs.update(stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        if sys.platform.startswith("win"):
+            kwargs["creationflags"] = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+    else:
+        if sys.platform.startswith("win"):
+            kwargs["creationflags"] = getattr(subprocess, "CREATE_NEW_CONSOLE", 0)  # visible progress under pythonw
+        print("Installing SyncVR dependencies (first run, ~100 MB). No Python? tools/get-desktop.sh|.ps1 installs the ready-made desktop app instead.")
     try:
         return subprocess.call(cmd, **kwargs) == 0
     except OSError as exc:
         print("pip failed to start: %s" % exc)
+        return False
+
+
+def install_media(venv: Path = VENV_DIR, installer=None) -> bool:
+    """Install the optional media add-on (PySide6-Addons) into the venv with its own pip, then record it
+    so needs_install() keeps it in the requirement set. ``installer(py, requirements)`` is injectable for tests."""
+    venv = Path(venv)
+    py = venv_python(venv, gui_exe=False)
+    if not py.exists():
+        return False
+    ok = (installer or (lambda p, reqs: _pip_install(p, reqs, quiet=True)))(py, REQUIREMENTS + MEDIA_REQUIREMENTS)
+    if not ok:
+        return False
+    try:
+        (venv / MEDIA_STAMP_NAME).write_text("\n".join(MEDIA_REQUIREMENTS) + "\n", encoding="utf-8")
+        (venv / STAMP_NAME).write_text(_stamp_text(venv), encoding="utf-8")
+    except OSError:
+        return False
+    return True
+
+
+def running_from_venv(venv: Path = VENV_DIR) -> bool:
+    """True when this process is the source-run GUI inside server/.venv (never in a frozen bundle)."""
+    if getattr(sys, "frozen", False):
+        return False
+    try:
+        return Path(sys.prefix).resolve() == Path(venv).resolve()
+    except OSError:
         return False
 
 
@@ -75,11 +119,11 @@ def ensure_venv(venv: Path = VENV_DIR) -> Optional[Path]:
         if not venv_python(venv, gui_exe=False).exists() or broken:
             if not _create_venv(venv):
                 return None
-        if not _pip_install(venv_python(venv, gui_exe=False)):
+        if not _pip_install(venv_python(venv, gui_exe=False), _requirements(venv)):
             print("Dependency install failed; will retry next start.")
             return None
         try:
-            (venv / STAMP_NAME).write_text(_stamp_text(), encoding="utf-8")  # only after pip succeeded
+            (venv / STAMP_NAME).write_text(_stamp_text(venv), encoding="utf-8")  # only after pip succeeded
         except OSError:
             pass
     return venv_python(venv)
