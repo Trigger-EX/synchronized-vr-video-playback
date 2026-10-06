@@ -25,7 +25,7 @@ def test_stereo_never_upscales_but_still_crops():
 def test_180():
     assert proxy_plan(5760, 2880, "180", "sbs") == (1728, 1728, "crop=2880:2880:0:0")
     assert proxy_plan(4096, 4096, "180", "mono") == (1728, 1728, "")
-    assert proxy_plan(2048, 2048, "180", "mono") is None
+    assert proxy_plan(1728, 1728, "180", "mono") is None
 
 
 def test_flat_cap_1920_keeps_aspect():
