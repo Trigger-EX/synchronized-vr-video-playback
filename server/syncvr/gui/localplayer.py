@@ -251,7 +251,7 @@ class LocalPlayer(QObject):
         pos = self.backend.position() if self._loaded else None
         p = self._sync.step(self._snapshot, self._focus or "", self._server_now(), self._content_dir, pos)
         if p["mode"] == "stop":
-            self._halt()
+            self._halt(keep_job=True)  # a stopped headset must not abandon the laptop copy being prepared
             self._failed = None
             return
         if "error" in p:
@@ -385,8 +385,10 @@ class LocalPlayer(QObject):
             self._proxy_unavailable(src, err or "unknown error")
         self.tick()
 
-    def _halt(self) -> None:
-        self._cancel_proxy()
+    def _halt(self, keep_job: bool = False) -> None:
+        if not keep_job:
+            self._cancel_proxy()
+            self._set_status("")
         self._no_frame_timer.stop()
         self._frames = 0
         if self._loaded or self._state != "stopped":

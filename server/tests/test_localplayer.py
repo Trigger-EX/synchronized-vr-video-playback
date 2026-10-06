@@ -239,8 +239,9 @@ def test_proxy_cancelled_when_stopped_and_audio_skips(qapp, tmp_path):
     lp.set_mode("video")
     lp.update(big_snap(mode="stopped"), "a")
     lp.tick()
-    assert FakeJob.jobs[0].cancelled
+    assert not FakeJob.jobs[0].cancelled  # headset stopped: the laptop copy keeps being prepared
     lp.stop()
+    assert FakeJob.jobs[0].cancelled
     lp.update(big_snap(), "a")
     lp.set_mode("audio")
     assert len(FakeJob.jobs) == 1 and ("load", str(tmp_path / "a.mp4")) in backends[-1].calls
