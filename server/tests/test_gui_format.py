@@ -36,7 +36,11 @@ def test_state_name_and_classes():
     assert fmt.state_name({"online": True, "status": {}}) == "connecting"
     assert fmt.state_name({"online": True, "status": {"state": "playing"}}) == "playing"
     assert (fmt.battery_class(19), fmt.battery_class(39), fmt.battery_class(40)) == ("poor", "meh", "")
-    assert (fmt.wifi_class(-76), fmt.wifi_class(-70), fmt.wifi_class(-50)) == ("poor", "meh", "")
+    assert (fmt.wifi_class(49), fmt.wifi_class(50), fmt.wifi_class(69), fmt.wifi_class(70)) == ("poor", "meh", "meh", "")
+    assert (fmt.wifi_percent(-120), fmt.wifi_percent(-80), fmt.wifi_percent(-60), fmt.wifi_percent(-30)) == (0, 40, 80, 100)
+    assert fmt.fmt_current(1.234) == "+1.23 A" and fmt.fmt_current(-0.5) == "-0.50 A"
+    assert fmt.current_class(0.2, True, 50) == "meh" and fmt.current_class(0.2, True, 100) == ""
+    assert fmt.current_class(0.5, True, 50) == "" and fmt.current_class(-0.2, False, 50) == ""
     assert fmt.rtt_class(51) == "meh" and fmt.temp_class(43) == "poor"
 
 
@@ -44,13 +48,14 @@ def test_device_info_and_content_summary():
     lib = [{"name": "a.mp4", "size": 10}, {"name": "b.mp4", "size": 20}]
     dev = {"inventory": {"a.mp4": 10, "b.mp4": 5},
            "status": {"battery": 0.15, "charging": True, "temp_c": 44.0, "worn": False, "rtt_ms": 12.0,
-                      "wifi_rssi": -80, "storage_free": 1024 ** 3}}
+                      "wifi_rssi": -80, "battery_current_a": 0.2, "storage_free": 1024 ** 3}}
     assert fmt.content_summary(dev, lib) == "1/2 videos"
     assert fmt.content_summary(dev, []) == ""
     info = dict(fmt.device_info(dev, lib))
     assert info["battery 15% (charging)"] == "poor"
     assert info["44°C"] == "poor"
-    assert "not worn" in info and info["wifi -80 dBm"] == "poor"
+    assert "not worn" in info and info["wifi 40%"] == "poor"
+    assert info["+0.20 A"] == "meh"
     assert info["1.0 GB free"] == "meh"
     assert info["1/2 videos"] == ""
     assert fmt.device_info({"status": {"battery": -1}}, []) == []

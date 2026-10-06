@@ -73,3 +73,22 @@ def test_log_newest_first_with_device_names(win):
     feed(win, events=events + [{"t": 4.0, "level": "info", "message": "new"}])
     assert tab.list.item(0).text().endswith("new") and tab.list.count() == 4
     assert event_text({"t": 0, "message": "m"}, {}).endswith("[info]  m")
+
+
+def test_settings_laid_out_in_grid(win):
+    tab = win.tab_widgets["Settings"]
+    grid = tab.layout().itemAt(0).layout()
+    assert grid.columnCount() > 1 and grid.rowCount() * grid.columnCount() >= len(SETTINGS_SPEC)
+
+
+def test_log_level_filter(win):
+    from syncvr.gui.log import line_level
+    tab = win.tab_widgets["Log"]
+    assert line_level("12:00:00 WARNING x") == "warn" and line_level("1  [debug]  m") == "debug"
+    events = [{"t": 1.0, "level": lv, "message": lv} for lv in ("error", "warn", "info", "debug")]
+    feed(win, events=events)
+    assert tab.list.count() == 3 and not tab.level_boxes["debug"].isChecked()
+    tab.level_boxes["debug"].setChecked(True)
+    assert tab.list.count() == 4
+    tab.level_boxes["info"].setChecked(False)
+    assert [tab.list.item(i).text().split("  ")[1] for i in range(tab.list.count())] == ["[debug]", "[warn]", "[error]"]

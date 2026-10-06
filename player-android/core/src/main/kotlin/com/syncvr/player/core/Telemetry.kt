@@ -17,6 +17,8 @@ data class Telemetry(
     val wifiRssi: Int = 0,
     /** Headset is on a head (proximity sensor); null when the device cannot tell, which omits `worn`. */
     val worn: Boolean? = null,
+    /** Battery current in amps, + = charging, null when unknown (omits `battery_current_a`). */
+    val batteryCurrentA: Double? = null,
 ) {
     fun writeTo(w: JsonWriter) {
         w.field("battery", battery)
@@ -25,6 +27,7 @@ data class Telemetry(
             .field("storage_free", storageFree)
             .field("wifi_rssi", wifiRssi.toLong())
         worn?.let { w.field("worn", it) }
+        batteryCurrentA?.let { w.field("battery_current_a", it) }
     }
 }
 
@@ -45,6 +48,13 @@ object TelemetryMath {
 
     /** Android reports -127 (or nothing sensible) when not associated. */
     fun wifiRssi(raw: Int): Int = if (raw >= 0 || raw <= WIFI_INVALID_RSSI) 0 else raw
+
+    /** BATTERY_PROPERTY_CURRENT_NOW (microamps, sign varies by device) to amps, + = charging; 0 and Int.MIN_VALUE are unknown. */
+    fun batteryCurrentA(microAmps: Long, charging: Boolean): Double? {
+        if (microAmps == 0L || microAmps == Int.MIN_VALUE.toLong() || microAmps == Long.MIN_VALUE) return null
+        val amps = Math.abs(microAmps) / 1_000_000.0
+        return Math.round((if (charging) amps else -amps) * 100) / 100.0
+    }
 
     /** A proximity sensor reads "near" (below its maximum range) when the headset is on a face. */
     fun isWorn(distance: Float, maxRange: Float): Boolean = distance < maxRange

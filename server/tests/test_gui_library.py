@@ -127,3 +127,21 @@ def test_auto_choice_and_source_tooltip(win):
     assert cell(tab, 0, lib.PROJECTION) == "Flat screen"
     assert m.setData(idx, "auto")
     assert win.bridge.calls[-1] == ("update_video", "a.mp4", {"projection": "auto"})
+
+
+def test_view_combo_sends_update_video(win):
+    tab = feed(win, [video(format_source="filename"), video("b.mp4")])
+    assert not tab.view_combo.isEnabled() or tab.selected_video() is None
+    tab.table.selectRow(0)
+    tab.table.setCurrentIndex(tab.model.index(0, 0))
+    assert tab.view_combo.isEnabled() and tab.view_combo.currentData() == "auto"
+    assert win.bridge.calls == []  # syncing the combo sends nothing
+    tab.view_combo.setCurrentIndex(tab.view_combo.findData("180/sbs"))
+    tab._on_view_chosen(tab.view_combo.currentIndex())
+    assert win.bridge.calls[-1] == ("update_video", "a.mp4", {"projection": "180", "stereo": "sbs"})
+    tab.view_combo.setCurrentIndex(0)
+    tab._on_view_chosen(0)
+    assert win.bridge.calls[-1][2] == {"projection": "auto", "stereo": "auto"}
+    tab.table.setCurrentIndex(tab.model.index(1, 0))
+    assert tab.view_combo.currentData() == "360/mono"  # b.mp4: operator-set
+    assert not hasattr(win.playback, "view_combo")

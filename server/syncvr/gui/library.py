@@ -14,6 +14,9 @@ FIELDS = {TITLE: "title", PROJECTION: "projection", STEREO: "stereo", ROTATION: 
 PROJECTIONS = (("360", "360°"), ("180", "180°"), ("flat", "Flat screen"))
 STEREO_MODES = (("mono", "Mono"), ("tb", "3D top/bottom"), ("sbs", "3D side-by-side"))
 CHOICES = {PROJECTION: PROJECTIONS, STEREO: STEREO_MODES}
+VIEWS = (("360", "mono", "360° mono"), ("360", "tb", "360° 3D top/bottom"), ("360", "sbs", "360° 3D side-by-side"),
+         ("180", "mono", "180° mono"), ("180", "tb", "180° 3D top/bottom"), ("180", "sbs", "180° 3D side-by-side"),
+         ("flat", "mono", "Flat screen"), ("flat", "sbs", "Flat screen 3D side-by-side"))
 CHECK_COLORS = LEVEL_COLORS
 SOURCE_LABELS = {"operator": "set by you", "filename": "from the file name",
                  "resolution": "from the video's aspect ratio", "default": "default"}
@@ -221,12 +224,21 @@ class LibraryTab(QWidget):
 
         self.rescan_button = QPushButton("Rescan content folder")
         self.rescan_button.clicked.connect(lambda _c=False: window.bridge.rescan())
+        self.view_combo = QComboBox()
+        self.view_combo.setToolTip("How the selected video is displayed. Remembered for this video.")
+        self.view_combo.addItem("Auto", "auto")
+        for projection, stereo, label in VIEWS:
+            self.view_combo.addItem(label, "%s/%s" % (projection, stereo))
+        self.view_combo.activated.connect(self._on_view_chosen)
+        self.table.selectionModel().currentRowChanged.connect(lambda _c, _p: self._sync_view())
         self.empty_label = QLabel("The content folder is empty.")
         hint = QLabel("Put video files in the server's content folder. Changes here apply the next time a video is loaded.")
         hint.setObjectName("muted")
         self.empty_label.setObjectName("muted")
         bar = QHBoxLayout()
         bar.addWidget(self.rescan_button)
+        bar.addWidget(QLabel("View of selected video"))
+        bar.addWidget(self.view_combo)
         bar.addWidget(hint, 1)
         lay = QVBoxLayout(self)
         lay.addLayout(bar)
@@ -234,6 +246,36 @@ class LibraryTab(QWidget):
         lay.addWidget(self.table, 1)
         window.bridge.failed.connect(lambda _msg: self.reload())
         self.update_state()
+
+    def selected_video(self):
+        row = self.table.currentIndex().row()
+        return self.model.videos[row]["name"] if 0 <= row < len(self.model.videos) else None
+
+    def _on_view_chosen(self, _index) -> None:
+        name = self.selected_video()
+        if not name:
+            return
+        value = self.view_combo.currentData()
+        if value == "auto":
+            changes = {"projection": "auto", "stereo": "auto"}
+        else:
+            projection, stereo = value.split("/")
+            changes = {"projection": projection, "stereo": stereo}
+        self._window.bridge.update_video(name, changes)
+
+    def _sync_view(self) -> None:
+        """Show the selected video's stored view without sending anything."""
+        name = self.selected_video()
+        video = next((v for v in self.model.videos if v["name"] == name), None)
+        self.view_combo.setEnabled(video is not None)
+        if video is None:
+            return
+        if video.get("format_source", "operator") == "operator":
+            value = "%s/%s" % (video.get("projection"), video.get("stereo"))
+        else:
+            value = "auto"
+        idx = self.view_combo.findData(value)
+        self.view_combo.setCurrentIndex(idx if idx >= 0 else (0 if value == "auto" else -1))
 
     def _show_checks(self, index) -> None:
         if index.column() != CHECKS:
@@ -264,3 +306,4 @@ class LibraryTab(QWidget):
         videos = [dict(v) for v in snap.get("library") or []]
         self.model.set_data(videos, snap.get("devices") or [])
         self.empty_label.setVisible(not videos)
+        self._sync_view()

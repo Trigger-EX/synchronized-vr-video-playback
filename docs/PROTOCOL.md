@@ -45,7 +45,7 @@ object has a `type`. **All times are server-clock seconds** (the server's
 `status` fields: `state` (`idle`, `loading`, `ready`, `playing`, `syncing`, `paused`,
 `ended`, `error`), `video`, `position`, `expected`, `duration`, `drift_ms` (smoothed
 position error, + = ahead), `rate`, `mode`, `seek_time_ms`, `start_latency_ms`,
-`battery` (0–1, -1 unknown), `charging`, `temp_c`, `worn`, `storage_free`, `wifi_rssi`,
+`battery` (0–1, -1 unknown), `charging`, `battery_current_a` (amps, + = charging; optional, omitted when unknown), `temp_c`, `worn`, `storage_free`, `wifi_rssi`,
 `volume`, `rtt_ms`, `clock_synced`, `fps`, `download` (`{name, received, total}` or null),
 `error`.
 

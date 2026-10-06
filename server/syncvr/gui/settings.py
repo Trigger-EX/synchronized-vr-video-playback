@@ -2,13 +2,14 @@
 
 from collections import namedtuple
 
-from PySide6.QtWidgets import (QComboBox, QDoubleSpinBox, QFormLayout, QHBoxLayout, QLabel, QPushButton, QSpinBox,
+from PySide6.QtWidgets import (QComboBox, QDoubleSpinBox, QGridLayout, QHBoxLayout, QLabel, QPushButton, QSpinBox,
                                QVBoxLayout, QWidget)
 
 from ..protocol import CORRECTION_MODES, DEFAULT_SYNC_SETTINGS
 
 Spec = namedtuple("Spec", "key label help kind lo hi step decimals")
 MAX_DOWNLOADS = "max_downloads"
+GRID_COLUMNS = 3  # label+field cells per row
 
 
 def _spec(key, label, help_text, kind="int", lo=0, hi=10000, step=1, decimals=0):
@@ -58,8 +59,9 @@ class SettingsTab(QWidget):
         self._loading = False
         self._dirty = set()
         self.editors = {}
-        form = QFormLayout()
-        for spec in SETTINGS_SPEC:
+        grid = QGridLayout()
+        grid.setHorizontalSpacing(24)
+        for i, spec in enumerate(SETTINGS_SPEC):
             w = make_editor(spec)
             w.setToolTip(spec.help)
             signal = w.currentTextChanged if spec.kind == "choice" else w.valueChanged
@@ -68,10 +70,14 @@ class SettingsTab(QWidget):
             help_label = QLabel(spec.help)
             help_label.setWordWrap(True)
             help_label.setObjectName("fieldHelp")
-            box = QVBoxLayout()
-            box.addWidget(w)
-            box.addWidget(help_label)
-            form.addRow(spec.label, box)
+            cell = QVBoxLayout()
+            cell.addWidget(QLabel(spec.label))
+            cell.addWidget(w)
+            cell.addWidget(help_label)
+            cell.addStretch(1)
+            grid.addLayout(cell, *divmod(i, GRID_COLUMNS))
+        for col in range(GRID_COLUMNS):
+            grid.setColumnStretch(col, 1)
         self.save_button = QPushButton("Save settings")
         self.save_button.setProperty("primary", "true")
         self.defaults_button = QPushButton("Restore defaults")
@@ -82,7 +88,7 @@ class SettingsTab(QWidget):
         row.addWidget(self.defaults_button)
         row.addStretch(1)
         lay = QVBoxLayout(self)
-        lay.addLayout(form)
+        lay.addLayout(grid)
         lay.addLayout(row)
         lay.addStretch(1)
 

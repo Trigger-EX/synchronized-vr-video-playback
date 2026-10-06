@@ -177,7 +177,7 @@ class PlayerControllerTest {
     @Test fun statusIncludesTelemetryAndFps() {
         val c = PlayerController(
             player, content, clock, inbox, { sent.add(it) }, { connected }, host, { t },
-            telemetry = { Telemetry(battery = 0.4, charging = true, tempC = 30.0, storageFree = 123, wifiRssi = -60, worn = false) },
+            telemetry = { Telemetry(battery = 0.4, charging = true, tempC = 30.0, storageFree = 123, wifiRssi = -60, worn = false, batteryCurrentA = 0.8) },
             fps = { 72.0 },
         )
         c.tick()
@@ -188,6 +188,7 @@ class PlayerControllerTest {
         assertEquals(123.0, s["storage_free"])
         assertEquals(-60.0, s["wifi_rssi"])
         assertEquals(false, s["worn"])
+        assertEquals(0.8, s["battery_current_a"])
         assertEquals(72.0, s["fps"])
     }
 

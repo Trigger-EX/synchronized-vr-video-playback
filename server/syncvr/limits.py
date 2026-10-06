@@ -80,8 +80,8 @@ def check_video(probe: Optional[dict], limits: GoLimits = GO_LIMITS) -> List[dic
         boxes = limits.max_resolutions[codec]
         if width and height and not _fits(width, height, boxes):
             allowed = " or ".join(_box(b) for b in boxes)
-            out.append(issue(ERROR, "resolution",
-                             f"{width}×{height} is above the Go's {name} decoder limit ({allowed})"))
+            out.append(issue(WARN, "resolution",
+                             f"{width}×{height} is above the Go's {name} decoder limit ({allowed}); it may still play"))
         if profile:
             lowered = profile.lower()
             if lowered in limits.warn_profiles.get(codec, ()):

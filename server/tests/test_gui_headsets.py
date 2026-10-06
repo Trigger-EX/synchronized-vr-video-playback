@@ -37,7 +37,7 @@ def test_cards_updated_in_place(win):
     assert card.state_label.text() == "playing"
     assert "drift +90 ms" in card.time_label.text() and "0:30 / 1:00" in card.time_label.text()
     assert "color" in card.time_label.text()  # poor drift is coloured
-    for frag in ("battery 15%", "45°C", "on head", "rtt 60 ms", "wifi -80 dBm", "free", "0/1 videos"):
+    for frag in ("battery 15%", "45°C", "on head", "rtt 60 ms", "wifi 40%", "free", "0/1 videos"):
         assert frag in card.info_label.text()
     assert card.group_label.text() == "A" and card.player_label.text() == "exo"
     assert card.position_bar.value() == 500

@@ -40,3 +40,11 @@ Server already has `guess_format()`, editable `projection`/`stereo`, persistence
 6. **Docs**: HEADSET_SETUP / EXECUTION_PLAN: cycle is a debug option.
 
 Risks: 2:1 can be 360 mono or 180 SBS (filename token decides); native changes unverified on hardware; stored metadata for old videos counts as "operator".
+
+## Charge rate (amps) and Wi-Fi percentage
+
+- New optional status field `battery_current_a` (float A, + = charging, omitted when unknown). No protocol/controller change: status dict is stored as-is.
+- Player: `Telemetry.batteryCurrentA` + `TelemetryMath.batteryCurrentA(microAmps, charging)` (null for 0/MIN_VALUE; sign from charging flag, 0.01 A rounding); `TelemetrySampler` reads `BATTERY_PROPERTY_CURRENT_NOW` (try/catch).
+- Server `gui/format.py`: `wifi_percent(dbm)=clamp(2*(dbm+100),0,100)`; `wifi_class(pct)` >=70 good, >=50 meh, else poor; `fmt_current` "%+.2f A"; `current_class` meh when charging <0.3 A and battery <100%; `device_info` shows "wifi NN%" and the current entry when present.
+- Also: `sim.py` simulated field, `docs/PROTOCOL.md`, tests (TelemetryTest, PlayerControllerTest, test_gui_format, test_gui_headsets).
+- Risk: some kernels report mA not µA; verify on a real Go.

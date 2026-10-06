@@ -9,9 +9,6 @@ from . import format as fmt
 SEEK_STEPS = (-30, -10, 10, 30)
 CLOCK_MS = 250
 SEEK_RANGE = 1000
-VIEWS = (("360", "mono", "360° mono"), ("360", "tb", "360° 3D top/bottom"), ("360", "sbs", "360° 3D side-by-side"),
-         ("180", "mono", "180° mono"), ("180", "tb", "180° 3D top/bottom"), ("180", "sbs", "180° 3D side-by-side"),
-         ("flat", "mono", "Flat screen"), ("flat", "sbs", "Flat screen 3D side-by-side"))
 
 
 class PlaybackPanel(QWidget):
@@ -29,13 +26,6 @@ class PlaybackPanel(QWidget):
         self.video_combo = QComboBox()
         self.video_combo.setMinimumWidth(240)
         self.video_combo.activated.connect(lambda _i: setattr(self, "_video_touched", True))
-        self.view_combo = QComboBox()
-        self.view_combo.setToolTip("How the selected video is displayed. Remembered for this video.")
-        self.view_combo.addItem("Auto", "auto")
-        for projection, stereo, label in VIEWS:
-            self.view_combo.addItem(label, "%s/%s" % (projection, stereo))
-        self.view_combo.activated.connect(self._on_view_chosen)
-        self.video_combo.currentIndexChanged.connect(lambda _i: self._sync_view())
         self.now_playing = QLabel("Nothing loaded")
         self.now_playing.setObjectName("now")
         self.pos_label = QLabel("0:00")
@@ -93,8 +83,6 @@ class PlaybackPanel(QWidget):
         top.addWidget(self.target_label, 1)
         top.addWidget(QLabel("Video"))
         top.addWidget(self.video_combo)
-        top.addWidget(QLabel("View"))
-        top.addWidget(self.view_combo)
         seek_row = QGridLayout()
         seek_row.addWidget(self.now_playing, 0, 0, 1, 3)
         seek_row.addWidget(self.pos_label, 1, 0)
@@ -140,33 +128,6 @@ class PlaybackPanel(QWidget):
             self._window.on_failed("No video in the library")
             return
         self.send(action, **{pick: [name] if pick == "videos" else name}, **params)
-
-    def _on_view_chosen(self, _index) -> None:
-        name = self.selected_video()
-        if not name:
-            return
-        value = self.view_combo.currentData()
-        if value == "auto":
-            changes = {"projection": "auto", "stereo": "auto"}
-        else:
-            projection, stereo = value.split("/")
-            changes = {"projection": projection, "stereo": stereo}
-        self._window.bridge.update_video(name, changes)
-
-    def _sync_view(self) -> None:
-        """Show the selected video's stored view without sending anything."""
-        video = next((v for v in (self._window.snapshot or {}).get("library") or []
-                      if v["name"] == self.selected_video()), None)
-        if video is None:
-            return
-        if video.get("format_source", "operator") == "operator":
-            value = "%s/%s" % (video.get("projection"), video.get("stereo"))
-        else:
-            value = "auto"
-        idx = self.view_combo.findData(value)
-        self.view_combo.setCurrentIndex(idx if idx >= 0 else 0)
-        if idx < 0 and value != "auto":
-            self.view_combo.setCurrentIndex(-1)
 
     def send_message(self) -> None:
         text = self.message_edit.text().strip()
@@ -237,7 +198,6 @@ class PlaybackPanel(QWidget):
             dev = self.focus_device()
             if not self._video_touched and dev and dev["desired"]["video"] in [v["name"] for v in library]:
                 self.video_combo.setCurrentIndex(self.video_combo.findData(dev["desired"]["video"]))
-            self._sync_view()
         finally:
             self._updating = False
         self.update_clock()

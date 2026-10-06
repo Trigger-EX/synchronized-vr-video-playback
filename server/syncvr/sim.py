@@ -335,6 +335,7 @@ class SimHeadset:
             "type": "status",
             "battery": round(0.8 - self.index * 0.01, 2),
             "charging": False,
+            "battery_current_a": -0.45,
             "temp_c": 31.5,
             "worn": True,
             "storage_free": 20 * 1024 ** 3,

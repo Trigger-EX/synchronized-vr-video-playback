@@ -12,13 +12,14 @@ class TelemetryTest {
     private fun json(t: Telemetry) = Json.parseObject(JsonWriter("status").also { t.writeTo(it) }.toString())!!
 
     @Test fun writesServerFieldNames() {
-        val o = json(Telemetry(0.85, true, 31.5, 20L * 1024 * 1024 * 1024, -58, true))
+        val o = json(Telemetry(0.85, true, 31.5, 20L * 1024 * 1024 * 1024, -58, true, 1.25))
         assertEquals(0.85, o["battery"])
         assertEquals(true, o["charging"])
         assertEquals(31.5, o["temp_c"])
         assertEquals(20.0 * 1024 * 1024 * 1024, o["storage_free"])
         assertEquals(-58.0, o["wifi_rssi"])
         assertEquals(true, o["worn"])
+        assertEquals(1.25, o["battery_current_a"])
     }
 
     @Test fun unknownValues() {
@@ -28,6 +29,7 @@ class TelemetryTest {
         assertEquals(-1.0, o["storage_free"])
         assertEquals(0.0, o["wifi_rssi"])
         assertFalse(o.containsKey("worn"))
+        assertFalse(o.containsKey("battery_current_a"))
     }
 
     @Test fun batteryConversions() {
@@ -40,6 +42,15 @@ class TelemetryTest {
         assertFalse(TelemetryMath.isCharging(3))
         assertEquals(31.5, TelemetryMath.temperatureC(315))
         assertNull(TelemetryMath.temperatureC(Int.MIN_VALUE))
+    }
+
+    @Test fun batteryCurrent() {
+        assertEquals(1.25, TelemetryMath.batteryCurrentA(1_250_000, true))
+        assertEquals(-0.46, TelemetryMath.batteryCurrentA(460_000, false))
+        assertEquals(-0.46, TelemetryMath.batteryCurrentA(-460_000, false))
+        assertEquals(0.5, TelemetryMath.batteryCurrentA(-500_000, true))
+        assertNull(TelemetryMath.batteryCurrentA(0, true))
+        assertNull(TelemetryMath.batteryCurrentA(Int.MIN_VALUE.toLong(), true))
     }
 
     @Test fun wifiAndStorageAndWorn() {

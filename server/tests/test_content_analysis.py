@@ -49,16 +49,16 @@ def test_resolution_limits():
     # H.264 may be 4K UHD or 4096x2048, HEVC only 4096x2048.
     assert check_video(probe(video={"width": 4096, "height": 2048})) == []
     assert check_video(probe(video={"width": 3840, "height": 2160})) == []
-    assert "resolution" in codes(check_video(probe(video={"width": 4096, "height": 2160})), ERROR)
+    assert "resolution" in codes(check_video(probe(video={"width": 4096, "height": 2160})), WARN)
     assert check_video(probe(video={"codec": "hevc", "profile": "Main", "width": 4096, "height": 2048})) == []
     assert "resolution" in codes(check_video(probe(video={"codec": "hevc", "profile": "Main",
-                                                          "width": 3840, "height": 2160})), ERROR)
+                                                          "width": 3840, "height": 2160})), WARN)
 
 
 def test_resolution_message():
     issues = check_video(probe(video={"codec": "hevc", "profile": "Main", "width": 5760, "height": 2880}))
-    assert issues[0]["level"] == ERROR
-    assert issues[0]["message"] == "5760×2880 is above the Go's HEVC decoder limit (4096×2048)"
+    assert issues[0]["level"] == WARN
+    assert issues[0]["message"] == "5760×2880 is above the Go's HEVC decoder limit (4096×2048); it may still play"
 
 
 def test_profiles():
@@ -111,7 +111,7 @@ def test_probe_failure_is_an_error():
 
 
 def test_errors_sort_before_warnings():
-    issues = check_video(probe(faststart=False, audio=None, video={"width": 8192, "height": 4096}))
+    issues = check_video(probe(faststart=False, audio=None, video={"profile": "Main 4:4:4"}))
     assert [i["level"] for i in issues] == [ERROR, WARN, INFO]
 
 

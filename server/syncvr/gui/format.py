@@ -57,8 +57,20 @@ def rtt_class(ms) -> str:
     return "meh" if ms > 50 else ""
 
 
-def wifi_class(dbm) -> str:
-    return "poor" if dbm < -75 else "meh" if dbm < -65 else ""
+def wifi_percent(dbm) -> int:
+    return int(max(0, min(100, 2 * (dbm + 100))))
+
+
+def wifi_class(pct) -> str:
+    return "" if pct >= 70 else "meh" if pct >= 50 else "poor"
+
+
+def fmt_current(amps) -> str:
+    return "%+.2f A" % amps
+
+
+def current_class(amps, charging, pct) -> str:
+    return "meh" if charging and amps < 0.3 and pct < 100 else ""
 
 
 def temp_class(c) -> str:
@@ -80,6 +92,10 @@ def device_info(dev: dict, library: List[dict]) -> List[tuple]:
     if st.get("battery") is not None and st["battery"] >= 0:
         pct = int(round(st["battery"] * 100))
         info.append(("battery %d%%%s" % (pct, " (charging)" if st.get("charging") else ""), battery_class(pct)))
+    if st.get("battery_current_a") is not None:
+        pct = int(round(st["battery"] * 100)) if st.get("battery") is not None and st["battery"] >= 0 else 0
+        info.append((fmt_current(st["battery_current_a"]),
+                     current_class(st["battery_current_a"], st.get("charging"), pct)))
     if st.get("temp_c") is not None and st["temp_c"] > 0:
         info.append(("%.0f°C" % st["temp_c"], temp_class(st["temp_c"])))
     if st.get("worn") is not None:
@@ -87,7 +103,8 @@ def device_info(dev: dict, library: List[dict]) -> List[tuple]:
     if st.get("rtt_ms") is not None:
         info.append(("rtt %.0f ms" % st["rtt_ms"], rtt_class(st["rtt_ms"])))
     if st.get("wifi_rssi"):
-        info.append(("wifi %d dBm" % st["wifi_rssi"], wifi_class(st["wifi_rssi"])))
+        pct = wifi_percent(st["wifi_rssi"])
+        info.append(("wifi %d%%" % pct, wifi_class(pct)))
     if st.get("storage_free") is not None and 0 <= st["storage_free"] < 2 * 1024 ** 3:
         info.append(("%s free" % fmt_bytes(st["storage_free"]), "meh"))
     summary = content_summary(dev, library)
