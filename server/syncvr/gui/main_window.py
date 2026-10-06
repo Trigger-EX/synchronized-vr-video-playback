@@ -15,6 +15,7 @@ from .library import LibraryTab
 from .log import LogTab
 from .mirror import MirrorManager, embed_supported, find_native_window
 from .viewpane import ViewPane
+from .localplayer import LocalPlayer
 from .playback import PlaybackPanel
 from .settings import SettingsTab
 from .theme import set_property
@@ -24,7 +25,8 @@ STATUS_MS = 5000
 
 
 class MainWindow(QMainWindow):
-    def __init__(self, bridge, config, log_path: Path, mirror=None, finder=find_native_window, embedder=None):
+    def __init__(self, bridge, config, log_path: Path, mirror=None, finder=find_native_window, embedder=None,
+                 local_player=None):
         super().__init__()
         self.bridge = bridge
         self._config = config
@@ -59,7 +61,11 @@ class MainWindow(QMainWindow):
                             "Settings": SettingsTab(self), "Log": LogTab(self)}
         for name in TABS:
             self.tabs.addTab(self.tab_widgets[name], name)
+        self.local_player = local_player or LocalPlayer(bridge, getattr(config, "content_dir", "."), self.server_now)
+        self.local_player.error.connect(self.on_failed)
+        self.local_player.windowClosed.connect(lambda: self.playback.uncheck_local())
         self.playback = PlaybackPanel(self)
+        self.playback.localChanged.connect(self.sync_local)
         self.stats_label = QLabel("Starting...")
         self.stats_label.setObjectName("stats")
         self.server_label = QLabel("")
@@ -226,6 +232,7 @@ class MainWindow(QMainWindow):
             self.view_headset(self.targets[0])  # docked view follows the selection
         self.headsets.update_selection()
         self.playback.update_state()
+        self.sync_local()
 
     def on_state(self, snap) -> None:
         self.snapshot = snap
@@ -236,6 +243,14 @@ class MainWindow(QMainWindow):
         for widget in self.tab_widgets.values():
             widget.update_state()
         self.playback.update_state()
+        self.sync_local()
+
+    def sync_local(self) -> None:
+        lp, pb = self.local_player, self.playback
+        lp.set_mode(pb.local_mode())
+        focus = pb.focus_device()
+        lp.update(self.snapshot, focus["id"] if focus else None)
+        lp.set_follow(pb.follow_device_id())
 
     def update_status(self, snap) -> None:
         st = fmt.fleet_stats(snap.get("devices") or [])
@@ -270,6 +285,7 @@ class MainWindow(QMainWindow):
 
     def closeEvent(self, event) -> None:
         self._mirror_timer.stop()
+        self.local_player.stop()
         self.close_view()
         self.mirror.stop_all()
         self.bridge.close()

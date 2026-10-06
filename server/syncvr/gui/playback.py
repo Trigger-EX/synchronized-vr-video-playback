@@ -1,7 +1,7 @@
 """Transport, volume, messaging and content-push controls for the targeted headsets."""
 
-from PySide6.QtCore import Qt, QTimer
-from PySide6.QtWidgets import (QComboBox, QGridLayout, QGroupBox, QHBoxLayout, QLabel, QLineEdit, QMessageBox,
+from PySide6.QtCore import Qt, QTimer, Signal
+from PySide6.QtWidgets import (QCheckBox, QComboBox, QGridLayout, QGroupBox, QHBoxLayout, QLabel, QLineEdit, QMessageBox,
                                QPushButton, QSlider, QVBoxLayout, QWidget)
 
 from . import format as fmt
@@ -12,6 +12,8 @@ SEEK_RANGE = 1000
 
 
 class PlaybackPanel(QWidget):
+    localChanged = Signal()
+
     def __init__(self, window):
         super().__init__(window)
         self._window = window
@@ -78,6 +80,20 @@ class PlaybackPanel(QWidget):
         content.addWidget(self._button("cancel_downloads", "Stop downloads", lambda: self.send("cancel_downloads")))
         content.addWidget(self._button("delete", "Delete video", self.delete_video))
         content.addStretch(1)
+        self.local_video = QCheckBox("Play on this computer")
+        self.local_audio = QCheckBox("Audio only on this computer")
+        self.local_follow = QCheckBox("Follow headset view")
+        avail = window.local_player.availability()
+        for box, key in ((self.local_video, "video"), (self.local_audio, "audio")):
+            ok, reason = avail[key]
+            box.setEnabled(ok)
+            box.setToolTip("" if ok else "Unavailable: " + reason)
+            box.toggled.connect(lambda on, b=box: self._on_local_toggled(b, on))
+            content.addWidget(box)
+        self.local_follow.setEnabled(False)
+        self.local_follow.setToolTip("Mirror the selected headset's view direction in the local video window")
+        self.local_follow.toggled.connect(lambda _on: self.localChanged.emit())
+        content.addWidget(self.local_follow)
 
         top = QHBoxLayout()
         top.addWidget(self.target_label, 1)
@@ -113,6 +129,33 @@ class PlaybackPanel(QWidget):
         elif key == "delete":
             b.setProperty("danger", "true")
         return b
+
+    def _on_local_toggled(self, box, on) -> None:
+        other = self.local_audio if box is self.local_video else self.local_video
+        if on and other.isChecked():
+            other.blockSignals(True)
+            other.setChecked(False)
+            other.blockSignals(False)
+        self.local_follow.setEnabled(self.local_video.isChecked() and self.local_video.isEnabled())
+        if not self.local_follow.isEnabled():
+            self.local_follow.setChecked(False)
+        self.localChanged.emit()
+
+    def local_mode(self):
+        return "video" if self.local_video.isChecked() else "audio" if self.local_audio.isChecked() else None
+
+    def follow_device_id(self):
+        """Device to follow: the single selected target, else the focus device; None when off."""
+        if not (self.local_follow.isChecked() and self.local_follow.isEnabled()):
+            return None
+        if len(self._window.targets) == 1:
+            return self._window.targets[0]
+        dev = self.focus_device()
+        return dev["id"] if dev else None
+
+    def uncheck_local(self) -> None:
+        self.local_video.setChecked(False)
+        self.local_audio.setChecked(False)
 
     # ------------------------------------------------------------ commands
 

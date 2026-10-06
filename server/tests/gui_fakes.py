@@ -13,6 +13,7 @@ class FakeBridge(QObject):
         super().__init__()
         self.calls = []
         self.closed = False
+        self.next_pose = None
 
     def command(self, action, targets, **params):
         self.calls.append((action, targets, params))
@@ -31,6 +32,16 @@ class FakeBridge(QObject):
 
     def set_max_downloads(self, value):
         self.calls.append(("set_max_downloads", value))
+
+    def follow(self, device_id):
+        self.calls.append(("follow", device_id))
+
+    def unfollow(self):
+        self.calls.append(("unfollow",))
+
+    def pose(self, device_id, cb):
+        self.calls.append(("pose", device_id))
+        cb(self.next_pose)
 
     def rescan(self):
         self.calls.append(("rescan",))
