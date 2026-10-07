@@ -1,0 +1,3 @@
+WINDOW MANAGER WINDOWS (dumpsys window windows)
+  mCurrentFocus=null
+  mFocusedApp=null

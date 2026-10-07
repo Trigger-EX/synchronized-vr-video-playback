@@ -1,0 +1,4 @@
+Build configuration: [sf]
+Display 0 HWC layers:
+  Layer name
+  com.syncvr.player/com.syncvr.player.MainActivity#0

@@ -1,0 +1,15 @@
+DISPLAY MANAGER (dumpsys display)
+  Display Manager State:
+    mSafeMode=false
+    mPendingTraversal=false
+
+Display States: size=1
+  Display Id=0
+  Display State=ON
+  Display Brightness=0.5
+
+Logical Displays: size=1
+  Display 0:
+    mDisplayId=0
+    mPrimaryDisplayDevice=Built-in Screen
+    mBaseDisplayInfo=DisplayInfo{"Built-in Screen", displayId 0, state ON, 2560 x 1440, 72.0 fps}

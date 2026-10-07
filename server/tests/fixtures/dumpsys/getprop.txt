@@ -1,0 +1,3 @@
+[ro.product.model]: [Oculus Go]
+[ro.build.version.release]: [7.1.2]
+[ro.serialno]: [1WMHH000000000]

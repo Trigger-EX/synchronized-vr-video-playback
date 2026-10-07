@@ -191,6 +191,7 @@ Actions:
 | `sleep`, `wake` | adb jobs; confirm token required (see below). Screen off (`input keyevent 223`) or on (`224`) |
 | `screen_refresh` | adb job; confirm token required. `min_asleep_s` (default 1, max 30). Sends one 223, polls `dumpsys power \| grep mWakefulness` until `Asleep` (3 s timeout), waits `min_asleep_s`, sends 224 and confirms `Awake`. Interrupts playback |
 | `poweroff` | adb job (`reboot -p`); confirm token required; gated by feature `power.poweroff`; `dry_run` defaults to true. A real (`dry_run: false`) power off of every headset (target `all`/omitted, or a list naming every known headset) is refused unless the command also has `"confirm_every": true` |
+| `snapshot` | read-only adb job, gated by feature `debug.snapshot` (so `testing: true` works as for `poweroff`); no confirm token. `screenshot` (bool, default false) adds `adb exec-out screencap -p`. Writes `<data_dir>/snapshots/<label>_<serial>_<YYYYmmdd-HHMMSS-ffffff>/` on the server (nothing on the headset), one file per command: `power`, `display`, `window` (`dumpsys window windows`), `activity`, `audio`, `surfaceflinger`, `surfaceflinger_list`, `thermal`, `battery`, `logcat` (`-d -t 2000`), `getprop` (each `<name>.txt`), plus `screenshot.png` and `SUMMARY.txt` (wakefulness, display state, focus, thermal status, battery temperature). A command that fails or times out writes `<name>.error.txt` and the rest still run. Each headset's job result is `saved to <folder>` (with the failed command names); it is FAILED only when every command failed or the headset is unreachable. At most 4 headsets are captured at a time |
 
 Example:
 
@@ -217,6 +218,7 @@ Actions that act through adb (rather than the headset connection) are checked by
 - **Jobs.** adb actions return `{"job": "<id>"}` at once and run in the background. Each headset's outcome is added to
   `events` as one `OK` or `FAILED` line, and `jobs` in `GET /api/state` lists recent jobs:
   `{id, action, state: running|done|failed, total, done, failed, started, results: [{device, ok, message}]}`.
+- **Snapshot.** `snapshot` is an adb job like the power actions (the web layer fetches `adb devices` off the event loop for it) but needs no confirmation token; `preview` still works and reports `needs_confirm: false`.
 - **Power actions.** `sleep`, `wake`, `screen_refresh` and `poweroff` run per headset by adb serial (`ip:5555`, else
   USB serial). A headset adb cannot reach is reported as `FAILED (unreachable ...)` and nothing is sent to it. The
   preview adds `warnings` (list of strings: dry run notice, headsets not reachable by adb, and for `screen_refresh`

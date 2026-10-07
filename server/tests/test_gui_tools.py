@@ -181,3 +181,36 @@ def test_testing_card_lists_untested_and_marks(win):
 def test_asleep_label(win):
     tab = feed(win, asleep=["a"])
     assert tab.asleep_label.text() == "1 headset put to sleep from here"
+
+
+# ---------------------------------------------------------------- snapshot
+
+def test_snapshot_button_gated_like_poweroff_and_opened_from_testing_card(win):
+    tab = feed(win)  # debug.snapshot not tested yet
+    assert not tab.snapshot_button.isEnabled()
+    assert "debug.snapshot" in tab.testing_buttons
+    tab.run_snapshot(testing=True)
+    assert win.bridge.calls[-1] == ("preview", "snapshot", "all", {"screenshot": False, "testing": True})
+
+
+def test_snapshot_button_acts_on_selection_with_screenshot_option(win):
+    tab = feed(win, tested={"debug.snapshot"})
+    assert tab.snapshot_button.isEnabled()
+    win.set_targets(["a"])
+    tab.screenshot_check.setChecked(True)
+    tab.snapshot_button.click()
+    assert win.bridge.calls[-1] == ("preview", "snapshot", ["a"], {"screenshot": True})
+    win.bridge.previewed.emit("snapshot", preview("Snapshot 1 headset: Go A", needs_confirm=False),
+                              {"targets": ["a"], "screenshot": True})
+    assert win.bridge.calls[-1][:3] == ("confirmed", "snapshot", ["a"])  # no dialog needed
+
+
+def test_open_folder_uses_snapshots_dir_under_data_dir(win, tmp_path):
+    tab = feed(win)
+    opened = []
+    tab._open_url = lambda url: opened.append(url.toLocalFile()) or True
+    tab.open_snapshots_folder()
+    assert opened == [] and "No data folder" in win.statusBar().currentMessage()
+    win._config.data_dir = tmp_path / "data"
+    tab.open_snapshots_folder()
+    assert opened == [str(tmp_path / "data" / "snapshots")] and (tmp_path / "data" / "snapshots").is_dir()

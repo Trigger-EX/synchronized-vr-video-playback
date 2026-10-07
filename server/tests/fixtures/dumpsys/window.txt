@@ -1,0 +1,8 @@
+WINDOW MANAGER WINDOWS (dumpsys window windows)
+  Window #0 Window{1a2b3c u0 com.oculus.vrshell/com.oculus.vrshell.MainActivity}:
+    mDisplayId=0 stackId=1 mSession=Session{5d6e7f 1234:u0a10012}
+  Window #1 Window{4d5e6f u0 com.syncvr.player/com.syncvr.player.MainActivity}:
+    mDisplayId=0 stackId=2
+
+  mCurrentFocus=Window{4d5e6f u0 com.syncvr.player/com.syncvr.player.MainActivity}
+  mFocusedApp=ActivityRecord{7a8b9c u0 com.syncvr.player/.MainActivity t42}

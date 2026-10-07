@@ -4,6 +4,8 @@
 #   FAKE_ADB_FAIL     space-separated serials whose commands exit 1 ("error: device offline")
 #   FAKE_ADB_STATE    directory for per-serial wakefulness files (see below); FAKE_ADB_WAKEFULNESS default state
 #   FAKE_ADB_STUCK    serials whose screen ignores keyevents 223/224
+#   FAKE_ADB_FAIL_CMD space-separated substrings; a command whose argv contains one exits 1 (partial failure)
+#   FAKE_ADB_SLEEP_CMD substring of a command that sleeps $FAKE_ADB_SLEEP_CMD_S seconds (per-command timeout)
 #   FAKE_ADB_SLEEP    seconds every non-`devices` command takes (to exercise timeouts)
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 [ -n "$FAKE_ADB_LOG" ] && printf '%s\n' "$*" >> "$FAKE_ADB_LOG"
@@ -22,8 +24,26 @@ wakefulness() { if [ -n "$state_file" ] && [ -f "$state_file" ]; then cat "$stat
 for bad in $FAKE_ADB_FAIL; do
   if [ "$bad" = "$serial" ]; then echo "error: device offline" >&2; exit 1; fi
 done
+for bad in $FAKE_ADB_FAIL_CMD; do
+  case "$*" in *"$bad"*) echo "error: $bad failed" >&2; exit 1;; esac
+done
+if [ -n "$FAKE_ADB_SLEEP_CMD" ]; then
+  case "$*" in *"$FAKE_ADB_SLEEP_CMD"*) sleep "${FAKE_ADB_SLEEP_CMD_S:-5}";; esac
+fi
+fx="$here/../fixtures/dumpsys"
+if [ "$1" = "exec-out" ] && [ "$2" = "screencap" ]; then cat "$fx/screencap.png"; exit 0; fi
 if [ "$1" = "shell" ]; then
   case "$2" in
+    "dumpsys display"*) cat "$fx/display.txt"; exit 0;;
+    "dumpsys window windows"*) cat "$fx/${FAKE_ADB_WINDOW:-window}.txt"; exit 0;;
+    "dumpsys activity activities"*) cat "$fx/activities.txt"; exit 0;;
+    "dumpsys audio"*) cat "$fx/audio.txt"; exit 0;;
+    "dumpsys SurfaceFlinger --list"*) cat "$fx/surfaceflinger_list.txt"; exit 0;;
+    "dumpsys SurfaceFlinger"*) cat "$fx/surfaceflinger.txt"; exit 0;;
+    "dumpsys thermalservice"*) cat "$fx/thermal.txt"; exit 0;;
+    "dumpsys battery"*) cat "$fx/battery.txt"; exit 0;;
+    "logcat -d -t 2000"*) cat "$fx/logcat.txt"; exit 0;;
+    "getprop"*) cat "$fx/getprop.txt"; exit 0;;
     "dumpsys power"*)
       fixture="$here/../fixtures/dumpsys/power_$(wakefulness | tr 'A-Z' 'a-z').txt"
       case "$2" in *mWakefulness*) grep mWakefulness "$fixture";; *) cat "$fixture";; esac

@@ -1,8 +1,10 @@
 """Tools tab (Power and Testing cards) and the preview-then-confirm flow every fleet adb action goes through."""
 
 from html import escape
+from pathlib import Path
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import Qt, QUrl
+from PySide6.QtGui import QDesktopServices
 from PySide6.QtWidgets import (QCheckBox, QDialog, QDialogButtonBox, QGridLayout, QGroupBox, QHBoxLayout, QLabel,
                                QListWidget, QListWidgetItem, QPushButton, QScrollArea, QVBoxLayout, QWidget)
 
@@ -12,6 +14,8 @@ from .theme import mark
 
 POWER_ACTIONS = (("sleep", "Sleep"), ("wake", "Wake"), ("screen_refresh", "Screen refresh"))
 POWEROFF_FEATURE = "power.poweroff"
+SNAPSHOT_FEATURE = "debug.snapshot"
+SNAPSHOT_DIR = "snapshots"  # under the data folder; see diagnostics.SNAPSHOT_DIR
 STATUS_MS = 5000
 
 
@@ -157,6 +161,25 @@ class ToolsTab(QWidget):
         for item in (self.target_label, row, self.power_note, self.asleep_label):
             lay.addLayout(item) if hasattr(item, "addWidget") else lay.addWidget(item)
 
+        self.snapshot_button = QPushButton("Snapshot")
+        self.snapshot_button.clicked.connect(lambda _c=False: self.run_snapshot())
+        self.screenshot_check = QCheckBox("Include screenshot")
+        self.open_folder_button = QPushButton("Open folder")
+        self.open_folder_button.clicked.connect(lambda _c=False: self.open_snapshots_folder())
+        drow = QHBoxLayout()
+        for w in (self.snapshot_button, self.screenshot_check, self.open_folder_button):
+            drow.addWidget(w)
+        drow.addStretch(1)
+        self.debug_note = QLabel("Snapshot saves dumpsys, logcat and properties of the selected headsets (all when "
+                                 "none are selected) to the snapshots folder. It only reads from the headsets.")
+        self.debug_note.setWordWrap(True)
+        self.debug_note.setObjectName("fieldHelp")
+        debug = QGroupBox("DEBUG")
+        debug.setObjectName("toolCard")
+        dlay = QVBoxLayout(debug)
+        dlay.addLayout(drow)
+        dlay.addWidget(self.debug_note)
+
         self.testing_grid = QGridLayout()
         self.testing_empty = QLabel("Every feature has been marked as tested.")
         self.testing_empty.setObjectName("muted")
@@ -178,6 +201,7 @@ class ToolsTab(QWidget):
         play.setContentsMargins(20, 18, 20, 18)
         play.setSpacing(18)
         play.addWidget(power)
+        play.addWidget(debug)
         play.addWidget(testing)
         play.addStretch(1)
         scroll = QScrollArea()
@@ -213,6 +237,32 @@ class ToolsTab(QWidget):
     def _exec(self, dialog) -> bool:
         return dialog.exec() == QDialog.Accepted
 
+    # ------------------------------------------------------------ debug
+
+    def snapshot_tested(self) -> bool:
+        return any(f.get("key") == SNAPSHOT_FEATURE and f.get("tested") for f in self._features)
+
+    def run_snapshot(self, testing: bool = False) -> None:
+        params = {"screenshot": self.screenshot_check.isChecked()}
+        if testing or not self.snapshot_tested():
+            params["testing"] = True
+        self._window.confirmer.request("snapshot", self._window.target_spec(), **params)
+
+    def snapshots_dir(self):
+        data_dir = getattr(self._window._config, "data_dir", None)
+        return Path(data_dir) / SNAPSHOT_DIR if data_dir else None
+
+    def open_snapshots_folder(self) -> None:
+        folder = self.snapshots_dir()
+        if folder is None:
+            self._window.statusBar().showMessage("No data folder is configured.", STATUS_MS)
+            return
+        folder.mkdir(parents=True, exist_ok=True)
+        self._open_url(QUrl.fromLocalFile(str(folder)))
+
+    def _open_url(self, url) -> bool:
+        return QDesktopServices.openUrl(url)
+
     # ----------------------------------------------------------- testing
 
     def mark_tested(self, key: str) -> None:
@@ -229,6 +279,9 @@ class ToolsTab(QWidget):
         self.poweroff_button.setEnabled(self.poweroff_tested())
         self.poweroff_button.setToolTip("" if self.poweroff_tested() else
                                         "Not marked tested yet: use Open in the Testing card")
+        self.snapshot_button.setEnabled(self.snapshot_tested())
+        self.snapshot_button.setToolTip("" if self.snapshot_tested() else
+                                        "Not marked tested yet: use Open in the Testing card")
         untested = [f for f in self._features if not f.get("tested")]
         keys = [f["key"] for f in untested]
         if keys != list(self.testing_buttons):
@@ -243,6 +296,11 @@ class ToolsTab(QWidget):
                 cat.setObjectName("muted")
                 self.testing_grid.addWidget(cat, i, 1)
                 column = 2
+                if f["key"] == SNAPSHOT_FEATURE:
+                    opener = QPushButton("Open")
+                    opener.clicked.connect(lambda _c=False: self.run_snapshot(testing=True))
+                    self.testing_grid.addWidget(opener, i, column)
+                    column += 1
                 if f["key"] == POWEROFF_FEATURE:
                     opener = QPushButton("Open")
                     opener.clicked.connect(lambda _c=False: self.open_poweroff(testing=True))

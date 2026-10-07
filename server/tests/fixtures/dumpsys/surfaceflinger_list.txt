@@ -1,0 +1,2 @@
+Built-in Screen
+com.syncvr.player/com.syncvr.player.MainActivity#0

@@ -11,6 +11,7 @@ import time
 from concurrent.futures import ThreadPoolExecutor
 from typing import Iterable, Optional, Set
 
+from . import diagnostics
 from .adbtool import Adb
 
 MAX_WORKERS = 10
@@ -125,3 +126,14 @@ class AdbFleet:
             return "would power off (dry run, nothing sent)"
         self.shell(serial, "reboot -p")
         return "power off sent"
+
+    # ------------------------------------------------------- diagnostics
+
+    def snapshot(self, serial: str, label: str, data_dir, screenshot: bool = False) -> str:
+        """Capture one headset into ``<data_dir>/snapshots/``; returns a result line with the folder path."""
+        result = diagnostics.capture_device(self, serial, label, data_dir, screenshot)
+        if len(result.failed) >= result.total:
+            raise RuntimeError(f"every command failed; see {result.folder}")
+        note = f" ({len(result.failed)} of {result.total} commands failed: {', '.join(result.failed)})" \
+            if result.failed else ""
+        return f"saved to {result.folder}{note}"

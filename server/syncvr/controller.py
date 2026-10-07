@@ -49,6 +49,7 @@ PLAYBACK_ACTIONS = ("load", "play", "pause", "seek", "stop")
 MAX_JOBS_KEPT = 20
 PREVIEW_NAMES_SHOWN = 8
 POWER_ACTIONS = frozenset({"sleep", "wake", "screen_refresh", "poweroff"})
+ADB_ACTIONS = POWER_ACTIONS | {"snapshot"}  # run through adb jobs; callers pre-fetch `adb devices` off the loop
 
 
 class CommandError(Exception):
@@ -259,8 +260,10 @@ class Controller:
         self.intentionally_asleep: set = set()
         self.gated_actions["poweroff"] = "power.poweroff"
         self.confirm_actions.update(POWER_ACTIONS)
+        self.adb_actions = set(ADB_ACTIONS)
+        self.gated_actions["snapshot"] = "debug.snapshot"  # read-only: gated but needs no confirm token
         self.action_labels.update({"sleep": "Sleep", "wake": "Wake", "screen_refresh": "Screen refresh",
-                                   "poweroff": "Power off"})
+                                   "poweroff": "Power off", "snapshot": "Snapshot"})
         self.preview_warnings["screen_refresh"] = self._refresh_warnings
         self.loop: Optional[asyncio.AbstractEventLoop] = None  # where job results are marshalled to
         self.jobs: "OrderedDict[str, dict]" = OrderedDict()
@@ -774,6 +777,18 @@ class Controller:
             self.log_event("info", f"poweroff dry run: would power off {len(targets)} headset"
                                    f"{'s' if len(targets) != 1 else ''}: {', '.join(d.label for d in targets)}")
         return self._power_job("poweroff", targets, params, lambda serial: self.fleet.poweroff(serial, dry_run=dry))
+
+    def _act_snapshot(self, targets, params):
+        if self.data_dir is None:
+            raise CommandError("no data folder configured; snapshots cannot be saved")
+        shot = params.get("screenshot", False)
+        if not isinstance(shot, bool):
+            raise CommandError("screenshot must be true or false")
+        items = self.reachable(targets, params.get("_listed"))
+        labels = {serial: d.label for d, serial in items if serial}
+        data_dir = self.data_dir
+        return self.start_job("snapshot", items,
+                              lambda serial: self.fleet.snapshot(serial, labels.get(serial, serial), data_dir, shot))
 
     def _act_load(self, targets, params):
         video = self._video(params.get("video"))

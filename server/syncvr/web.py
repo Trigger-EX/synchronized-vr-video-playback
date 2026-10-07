@@ -81,7 +81,7 @@ class WebApp:
         try:
             body = await self._body(request)
             action = body.get("action", "")
-            listed = await self._adb_listing() if action in self.controller.confirm_actions else None
+            listed = await self._adb_listing() if action in self.controller.adb_actions else None
             result = self.controller.execute(action, body, listed=listed)
         except (CommandError, ValueError, TypeError, KeyError) as exc:
             return _json_error(400, str(exc))

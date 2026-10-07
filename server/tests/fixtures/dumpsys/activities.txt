@@ -1,0 +1,6 @@
+ACTIVITY MANAGER ACTIVITIES (dumpsys activity activities)
+  Display #0 (activities from top to bottom):
+    Stack #2:
+      Task id #42
+        * ActivityRecord{7a8b9c u0 com.syncvr.player/.MainActivity t42}
+  mResumedActivity: ActivityRecord{7a8b9c u0 com.syncvr.player/.MainActivity t42}

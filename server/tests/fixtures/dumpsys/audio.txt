@@ -1,0 +1,5 @@
+AUDIO MANAGER (dumpsys audio)
+  Stream volumes (device: index)
+  - STREAM_MUSIC:
+     Muted: false
+     Current: 2 (speaker): 8

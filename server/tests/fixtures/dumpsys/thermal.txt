@@ -1,0 +1,7 @@
+IsStatusOverride: false
+ThermalEventListeners:
+	callbacks: 1
+Thermal Status: 1
+Cached temperatures:
+	Temperature{mValue=36.5, mType=0, mName=skin, mStatus=0}
+HAL Ready: true
