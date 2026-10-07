@@ -113,6 +113,21 @@ Once connected, the player shows its name and connection state on a dark screen 
 dashboard shows `native` as the player type. Headsets use their Android serial number as their ID,
 the same serial `adb devices` shows, so it's easy to match a physical headset to its dashboard card.
 
+## Terminal (desktop app)
+
+**View > Open local terminal** opens a shell on the operator's computer; **View > Open terminal on selected
+headset** opens `adb shell` on the one selected online headset (resolved like the other adb tools, so it must
+appear in `adb devices`; otherwise it is refused). Sessions dock at the bottom, and closing a dock or the app
+hangs up the shell's process group (SIGHUP, then SIGKILL after a second).
+
+* Linux and macOS only; the menu entries are greyed out on Windows. The adb folder comes from
+  **File > Set scrcpy/adb folder...**.
+* Gated as `terminal.shell`: it opens only once marked tested, or via **Open** in the Tools tab's Testing card
+  (which uses the selected headset, or a local shell when none is selected).
+* Output is plain text (colours and cursor escapes are dropped, 5,000 lines kept); it is not a full-screen
+  terminal, so use `adb shell` in a real terminal for `top`, `vi` and the like.
+* It is GUI-only on purpose: the web dashboard and the CLI have no route to a shell.
+
 ## Kiosk mode
 
 `python3 -m syncvr adb kiosk on` disables the Oculus home (`com.oculus.vrshell`) and makes the

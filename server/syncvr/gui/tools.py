@@ -12,11 +12,13 @@ from PySide6.QtWidgets import (QCheckBox, QDialog, QDialogButtonBox, QFileDialog
 
 from ..automation import SHOW_MODE_WARNING
 from . import format as fmt
+from . import terminal
 from .theme import mark, set_property
 
 POWER_ACTIONS = (("sleep", "Sleep"), ("wake", "Wake"), ("screen_refresh", "Screen refresh"))
 POWEROFF_FEATURE = "power.poweroff"
 SNAPSHOT_FEATURE = "debug.snapshot"
+TERMINAL_FEATURE = terminal.FEATURE
 SNAPSHOT_DIR = "snapshots"  # under the data folder; see diagnostics.SNAPSHOT_DIR
 STATUS_MS = 5000
 
@@ -349,6 +351,9 @@ class ToolsTab(QWidget):
 
     # ----------------------------------------------------------- testing
 
+    def open_terminal(self, testing: bool = False) -> None:
+        self._window.open_terminal(self._window.selected_online_id(), testing)
+
     def mark_tested(self, key: str) -> None:
         self._window.bridge.set_feature_tested(key, True)
 
@@ -388,6 +393,13 @@ class ToolsTab(QWidget):
                 if f["key"] == POWEROFF_FEATURE:
                     opener = QPushButton("Open")
                     opener.clicked.connect(lambda _c=False: self.open_poweroff(testing=True))
+                    self.testing_grid.addWidget(opener, i, column)
+                    column += 1
+                if f["key"] == TERMINAL_FEATURE:
+                    opener = QPushButton("Open")
+                    opener.setToolTip("Open a terminal for testing: on the selected headset, or local when none is selected")
+                    opener.setEnabled(terminal.AVAILABLE)
+                    opener.clicked.connect(lambda _c=False: self.open_terminal(testing=True))
                     self.testing_grid.addWidget(opener, i, column)
                     column += 1
                 button = QPushButton("Mark tested")

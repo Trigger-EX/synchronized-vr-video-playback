@@ -18,6 +18,8 @@ from .viewpane import ViewPane
 from .localplayer import LocalPlayer
 from .playback import PlaybackPanel
 from .settings import SettingsTab
+from . import terminal
+from .terminal import TerminalManager
 from .theme import set_property
 from .tools import CommandConfirmer, ToolsTab
 
@@ -152,6 +154,18 @@ class MainWindow(QMainWindow):
             act.triggered.connect(lambda _c=False, h=handler: h())
             view_menu.addAction(act)
             self.capture_actions[key] = act
+        view_menu.addSeparator()
+        view_menu.setToolTipsVisible(True)
+        self.terminals = TerminalManager(self)
+        self.terminal_actions = {}
+        for key, text, handler in (("local", "Open &local terminal", lambda: self.open_terminal()),
+                                   ("headset", "Open terminal on selected &headset", self.open_headset_terminal)):
+            act = QAction(text, self)
+            act.triggered.connect(lambda _c=False, h=handler: h())
+            act.setEnabled(terminal.AVAILABLE)
+            act.setToolTip("" if terminal.AVAILABLE else terminal.UNAVAILABLE_TIP)
+            view_menu.addAction(act)
+            self.terminal_actions[key] = act
         self.batch = None
         self._batch_timer = QTimer(self)
         self._batch_timer.setInterval(1000)
@@ -306,6 +320,24 @@ class MainWindow(QMainWindow):
             return
         self.view_headset(devs[0]["id"])
 
+    def selected_online_id(self):
+        devs = [d for d in self.target_devices() if d.get("online")] if self.targets else []
+        return devs[0]["id"] if len(devs) == 1 else None
+
+    def open_terminal(self, device_id=None, testing: bool = False) -> None:
+        """A local shell, or one on the headset `device_id`; refused unless `terminal.shell` is tested or `testing`."""
+        if device_id:
+            self.terminals.open_headset(device_id, testing)
+        else:
+            self.terminals.open_local(testing)
+
+    def open_headset_terminal(self) -> None:
+        device_id = self.selected_online_id()
+        if device_id is None:
+            self.statusBar().showMessage("Select exactly one online headset to open a terminal on.", STATUS_MS)
+            return
+        self.open_terminal(device_id)
+
     def server_now(self) -> float:
         if not self.snapshot:
             return 0.0
@@ -406,6 +438,7 @@ class MainWindow(QMainWindow):
         self.local_player.stop()
         self.close_view()
         self.stop_batch()
+        self.terminals.close_all()
         self.mirror.stop_all()
         self.bridge.close()
         event.accept()
