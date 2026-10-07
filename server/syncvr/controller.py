@@ -310,6 +310,9 @@ class Controller:
         saved_features = data.get("tested_features", [])
         self.tested_features = features.normalize(saved_features if isinstance(saved_features, list) else [])
         self.show_mode = data.get("show_mode") is True
+        asleep = data.get("intentionally_asleep")
+        self.intentionally_asleep = {i for i in asleep if isinstance(i, str) and i in self.devices} \
+            if isinstance(asleep, list) else set()
         self.watchdogs.load(data.get("watchdogs"))  # enabled + cfg only; never armed
         if "max_downloads" in data:
             self.distributor.max_concurrent = max(0, int(data["max_downloads"]))
@@ -336,6 +339,7 @@ class Controller:
             "downloads": self.distributor.pending_json(),
             "tested_features": sorted(self.tested_features),
             "show_mode": self.show_mode,
+            "intentionally_asleep": sorted(i for i in self.intentionally_asleep if i in self.devices),
             "watchdogs": self.watchdogs.dump(),
         }
 
@@ -432,8 +436,11 @@ class Controller:
         if body.get("confirm") is True:
             if result["error"]:
                 raise CommandError(f"cannot confirm: {result['error']}")
-            if not result["total"]:
-                raise CommandError("cannot confirm: the pattern matches nothing in that snapshot")
+            by_file = result.get("by_file", {})
+            missing = [f for f in watchdogs.PATTERN_FILES if not by_file.get(f)]
+            if missing:  # the live rule needs the prompt in the logcat AND in the window list
+                raise CommandError("cannot confirm: the pattern must match in both logcat.txt and window.txt; "
+                                   f"no match in {', '.join(missing)}")
             self.set_watchdog("overheat", {"cfg": {"pattern": pattern, "pattern_confirmed": result["hash"]}},
                               tested_pattern=True)
             result["confirmed"] = True
@@ -806,15 +813,21 @@ class Controller:
     def _act_sleep(self, targets, params):
         ids = [d.device_id for d in targets]
         self.intentionally_asleep.update(ids)  # before the first adb call, so no watchdog races the sleep
-        return self._power_job("sleep", targets, params, self.fleet.sleep_screen,
-                               on_failed=self.intentionally_asleep.discard)
+        self.dirty = True  # persisted: a restart must not wake what was put to sleep on purpose
+        return self._power_job("sleep", targets, params, self.fleet.sleep_screen, on_failed=self._not_asleep)
+
+    def _not_asleep(self, device_id: str) -> None:
+        self.intentionally_asleep.discard(device_id)
+        self.dirty = True
 
     def _act_wake(self, targets, params):
         self.intentionally_asleep.difference_update(d.device_id for d in targets)
+        self.dirty = True
         return self._power_job("wake", targets, params, self.fleet.wake_screen)
 
     def _act_screen_refresh(self, targets, params):
         self.intentionally_asleep.difference_update(d.device_id for d in targets)
+        self.dirty = True
         min_asleep = max(0.0, min(30.0, float(params.get("min_asleep_s", MIN_ASLEEP_S))))
         return self._power_job("screen_refresh", targets, params,
                                lambda serial: self.fleet.screen_refresh(serial, min_asleep_s=min_asleep))

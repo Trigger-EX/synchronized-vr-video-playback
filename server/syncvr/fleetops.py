@@ -9,7 +9,7 @@ import subprocess
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
-from typing import Iterable, Optional, Set
+from typing import Dict, Iterable, Optional, Sequence, Set, Tuple
 
 from . import diagnostics
 from .adbtool import Adb
@@ -53,6 +53,48 @@ def adb_serial(dev, listed: Iterable[str]) -> Optional[str]:
     return None
 
 
+def resolve_serials(devices: Sequence, listed: Iterable[str]) -> Tuple[Dict[str, Optional[str]], Dict[str, str]]:
+    """Unambiguous adb serial per device id (None when unreachable) plus a note for every refused address.
+
+    For unattended automation, where acting on the wrong headset is worse than skipping one. A device is addressed
+    by the serial it reported itself, then by its remembered ``ip:5555``, and only when that value is in ``listed``
+    and is claimed by exactly one known device. An IP that two or more devices claim (a stale persisted address,
+    NAT) is never used: those devices are unreachable unless their own serial resolves. ``notes[device_id]`` says
+    why an address was refused.
+    """
+    listed = set(listed)
+    devices = list(devices)
+    ips: Dict[str, int] = {}
+    serials: Dict[str, int] = {}
+    for d in devices:
+        if getattr(d, "ip", ""):
+            ips[d.ip] = ips.get(d.ip, 0) + 1
+        if getattr(d, "serial", ""):
+            serials[d.serial] = serials.get(d.serial, 0) + 1
+    result: Dict[str, Optional[str]] = {}
+    notes: Dict[str, str] = {}
+    for d in devices:
+        ip, serial = getattr(d, "ip", ""), getattr(d, "serial", "")
+        chosen = None
+        if serial and serials.get(serial) == 1 and serial in listed:
+            chosen = serial
+        elif ip and ips.get(ip) == 1 and f"{ip}:{ADB_PORT}" in listed:
+            chosen = f"{ip}:{ADB_PORT}"
+        if ip and ips.get(ip, 0) > 1:
+            notes[d.device_id] = f"address {ip} is claimed by {ips[ip]} headsets"
+        elif serial and serials.get(serial, 0) > 1:
+            notes[d.device_id] = f"serial {serial} is claimed by {serials[serial]} headsets"
+        if chosen is None and d.device_id in notes:
+            result[d.device_id] = None
+        else:
+            result[d.device_id] = chosen
+    return result, notes
+
+
+class ListingFailed(RuntimeError):
+    """``adb devices`` itself failed (as opposed to reporting no devices)."""
+
+
 class AdbFleet:
     def __init__(self, adb: Optional[Adb] = None, executor: Optional[ThreadPoolExecutor] = None):
         self.adb = adb or Adb()
@@ -62,11 +104,18 @@ class AdbFleet:
     def executor(self) -> ThreadPoolExecutor:
         return self._executor or shared_executor()
 
-    def listed(self) -> Set[str]:
-        """Serials `adb devices` reports as ready; empty when adb is missing or fails."""
+    def listed_checked(self) -> Set[str]:
+        """Serials `adb devices` reports as ready; raises :class:`ListingFailed` when adb is missing or fails."""
         try:
             return set(self.adb.devices())
-        except (RuntimeError, OSError, subprocess.SubprocessError):
+        except (RuntimeError, OSError, subprocess.SubprocessError) as exc:
+            raise ListingFailed(str(exc) or type(exc).__name__) from exc
+
+    def listed(self) -> Set[str]:
+        """Like :meth:`listed_checked` but empty on failure (interactive callers; unattended code must not use it)."""
+        try:
+            return self.listed_checked()
+        except ListingFailed:
             return set()
 
     def adb_serial(self, dev, listed: Optional[Iterable[str]] = None) -> Optional[str]:

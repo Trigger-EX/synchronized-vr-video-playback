@@ -6,7 +6,7 @@
 #   FAKE_ADB_STUCK    serials whose screen ignores keyevents 223/224
 #   FAKE_ADB_FAIL_CMD space-separated substrings; a command whose argv contains one exits 1 (partial failure)
 #   FAKE_ADB_SLEEP_CMD substring of a command that sleeps $FAKE_ADB_SLEEP_CMD_S seconds (per-command timeout)
-#   FAKE_ADB_WINDOW   window fixture stem (default window); FAKE_ADB_LOGCAT file for `logcat -d -T`
+#   FAKE_ADB_WINDOW   window fixture stem (default window); FAKE_ADB_LOGCAT file for `logcat -d -T` and `logcat -d -t N`
 #   FAKE_ADB_CONNECT_FAIL addresses whose `adb connect` prints failed (exit 0, like real adb)
 #   FAKE_ADB_SLEEP    seconds every non-`devices` command takes (to exercise timeouts)
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -48,8 +48,7 @@ if [ "$1" = "shell" ]; then
     "dumpsys SurfaceFlinger"*) cat "$fx/surfaceflinger.txt"; exit 0;;
     "dumpsys thermalservice"*) cat "$fx/thermal.txt"; exit 0;;
     "dumpsys battery"*) cat "$fx/battery.txt"; exit 0;;
-    "logcat -d -T"*) cat "${FAKE_ADB_LOGCAT:-$fx/logcat.txt}"; exit 0;;
-    "logcat -d -t 2000"*) cat "$fx/logcat.txt"; exit 0;;
+    "logcat -d -T"*|"logcat -d -t"*) cat "${FAKE_ADB_LOGCAT:-$fx/logcat.txt}"; exit 0;;
     "getprop"*) cat "$fx/getprop.txt"; exit 0;;
     "dumpsys power"*)
       fixture="$here/../fixtures/dumpsys/power_$(wakefulness | tr 'A-Z' 'a-z').txt"

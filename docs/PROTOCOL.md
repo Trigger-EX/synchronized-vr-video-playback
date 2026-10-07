@@ -266,16 +266,49 @@ exact text quoted in the GUI arm dialog), `enabled`, `armed`, `mode` (`off` | `o
 **`POST /api/watchdogs/{name}`** with `{"enabled": bool, "armed": bool, "cfg": {...}, "testing": bool}` (all optional).
 Returns `{"ok": true, "watchdog": {...}}`; 400 with `{"error"}` for an unknown name, a wrong type, an unknown or invalid
 `cfg` key, or a refused arming. Arming is refused unless the watchdog's feature (`watchdog.<name>`) is marked tested or
-the request has `"testing": true`, and when its `arm_blocker` is set. Disabling also disarms. Changing the overheat
-pattern disarms it.
+the request has `"testing": true`, and when its `arm_blocker` is set. Disabling also disarms. ANY change to `cfg` (or to
+the setting set) disarms it, and an enable that goes from off to on starts clean (cursors and failure counts reset).
+Every `cfg` value is bounded (out-of-range is a 400); text keys (`package`, `exclude`, regexes) have a length cap, and a
+regex must be at least 3 characters, at most 200, and may not use backreferences, nested or alternated repeats such as
+`(a|b)+`, or match the empty string.
 
 | Watchdog | Sends | Only when |
 |---|---|---|
 | `stay_awake` (15 s) | WAKE (keyevent 224) | wakefulness is Asleep, Dozing or Dreaming and the headset is not intentionally asleep. A worn headset (telemetry) is not polled |
 | `popup` (10 s) | BACK (4), verified after 1.5 s, at most 3 failed tries per dialog | `mCurrentFocus` title matches `Application Error` or `Application Not Responding` and `cfg.evidence` (default: the player package) matches the focus line. If the player is disconnected and the app is not in front for 2 samples: launch (60 s cooldown) |
-| `overheat` (15 s) | BACK (4), 60 s cooldown | `cfg.pattern` matches a logcat line written since the last cycle (`logcat -T`) AND a line of the window list, player lines excluded from both. No built-in pattern |
+| `overheat` (15 s) | BACK (4), 60 s cooldown | `cfg.pattern` matches a logcat line written since the last cycle (`logcat -t 1000`, filtered in Python) AND a line of the window list, player lines excluded from both. No built-in pattern |
 | `black_screen` (30 s) | WAKE, or a screen refresh (`cfg.recovery`), 120 s cooldown | display OFF, player in front, Awake, not intentionally asleep and desired mode playing, for `cfg.samples` (3) samples in a row. Display ON while playing is only appended to `<data_dir>/probe/probe_YYYYMMDD.csv` (`picture` is `unsampled`; adb cannot see pixels) |
 | `keepalive` (30 s) | `adb connect <ip>:5555`, then WAKE | a headset with a remembered `ip` is missing from `adb devices` (retry every 30 s). A connect that does not print `connected to` fails and skips the wake. Blocked by brakes like the rest |
+
+**Safety rules (review fixes).**
+- *History.* The 20-entry decision deque is for display only. Cooldowns, give-up counts, `connect_fails` and
+  `intentionally_asleep` live in per-headset memory outside it. The attempt is recorded BEFORE the send and kept in a
+  `finally`, so a send that raises still counts (as `failed`, `verified: false`). Keepalive connects back off
+  exponentially after repeated failures.
+- *Identity.* An IP claimed by more than one device (stale or duplicate) is refused and logged once, and acts on no
+  headset; a reported serial that is listed by `adb devices` is preferred over the IP.
+- *Listing.* A failed `adb devices` is distinct from an empty one: the cycle is skipped (counter `listing_failed`). A
+  keepalive cycle also skips (counter `implausible`, with a log line) when more than 50% and more than 5 headsets look
+  missing.
+- *Regexes.* User patterns are matched in `observe()` on the executor, never on the loop thread. Logcat output is capped
+  (1000 lines), each line is length-capped, matching has a time budget between lines, and an observe timeout turns a
+  stuck headset into "no match" plus one log line. The stdlib `re` cannot be interrupted mid-match, so the pattern
+  validator is the main defence.
+- *Sends.* Sends run on a dedicated 2-worker executor (`syncvr-wd-send`). The worker re-checks the brake and the
+  intentionally-asleep set right before the adb command; if either flipped while it waited, nothing is sent and the
+  record is rolled back.
+- *Persistence.* `intentionally_asleep` is saved in `state.json` and restored (filtered to known headsets). `pattern_confirmed`
+  is stripped from `cfg` on load; confirming the pattern again is required after a restart.
+- *Black-screen* does not act on a headset the player reports as not worn (`worn` is false).
+- *Popup launch* (crash recovery) needs an active desired mode (playing or paused).
+- *Overheat* needs a match in BOTH logcat and the window list; after BACK it verifies the prompt is gone from the window
+  list (an unreachable headset is never "verified"). The logcat cursor is compared on a circular 366-day year (year
+  rollover, clock behind), cleared on enable and when the headset is unreachable, re-baselined when it is later than
+  the newest line, and the player's own lines never become the baseline.
+- *Confirmation.* `test_pattern` with `confirm` requires a match in both `logcat.txt` and `window.txt`; the confirmed hash
+  covers pattern, `exclude` and `package`.
+- *Probe CSV* rotates at 5 MB and keeps 14 files; "unsampled" rows are throttled (one per headset per 5 minutes) and are
+  written off the loop thread. History, cursors, memory and logged-error keys of removed devices are pruned each cycle.
 
 **Overheat pattern.** `POST /api/watchdogs/overheat/test_pattern` with `{"folder": <snapshot folder>, "pattern": str,
 "confirm": bool}` runs the pattern over that folder's `logcat.txt` and `window.txt` (player lines dropped) and returns

@@ -31,7 +31,7 @@ def kinds(actions):
 
 
 def entry(t=NOW - 10, sent=(), verified=None, **flags):
-    return {"t": t, "flags": flags, "sent": list(sent), "suppressed": None, "verified": verified}
+    return {"t": t, "flags": flags, "sent": list(sent), "failed": [], "suppressed": None, "verified": verified}
 
 
 # ------------------------------------------------------------ decide(): pure tables
@@ -53,7 +53,7 @@ def test_stay_awake_decide(obs, want):
 def popup_obs(fixture, online=True, **extra):
     text = fx(fixture)
     return dict({"focus_title": parsers.focus_title(text), "focused_app": parsers.focused_app(text),
-                 "online": online, "now": NOW}, **extra)
+                 "online": online, "now": NOW, "desired": "playing"}, **extra)
 
 
 POPUP_CFG = dict(Popup.defaults)
@@ -337,14 +337,14 @@ def test_load_ignores_garbage(ctl):
 
 def test_an_error_in_a_cycle_does_not_end_the_loop(ctl, monkeypatch):
     calls = {"n": 0}
-    real = ctl.fleet.listed
+    real = ctl.fleet.listed_checked
 
     def flaky():
         calls["n"] += 1
         if calls["n"] <= 2:
             raise RuntimeError("adb exploded")
         return real()
-    monkeypatch.setattr(ctl.fleet, "listed", flaky)
+    monkeypatch.setattr(ctl.fleet, "listed_checked", flaky)
     ctl.watchdogs.set("stay_awake", {"enabled": True})
     ctl.watchdogs.states["stay_awake"].cfg["interval_s"] = 0.02
 
@@ -438,6 +438,7 @@ def test_popup_ignores_a_foreign_dialog(ctl, adb_log, monkeypatch):
 def test_crash_launches_the_player_once_per_cooldown(ctl, adb_log, monkeypatch):
     monkeypatch.setenv("FAKE_ADB_WINDOW", "window_home")
     ctl.devices["hs0"].online = False
+    ctl.devices["hs0"].desired = {"mode": "playing"}
     arm(ctl, "popup")
     run(ctl, "popup", times=1, step=10)
     assert not sent(adb_log, "monkey")
@@ -550,7 +551,8 @@ def test_overheat_cycle_reads_new_log_lines_only(ctl, tmp_path, adb_log, monkeyp
     assert not sent(adb_log, "keyevent")
     st = ctl.watchdogs.states["overheat"]
     assert st.cursors["hs0"] == "10-07 12:00:03.400"
-    assert any("logcat -d -T" in ln and "SyncVR" in ln for ln in adb_lines(adb_log))  # filtered on the headset
+    # the tail is read unfiltered (the newest stamp is the truth); the player's lines are dropped in Python
+    assert any("logcat -d -t 1000" in ln and "SyncVR" not in ln for ln in adb_lines(adb_log))
     st.cursors["hs0"] = "10-07 12:00:00.000"  # pretend the prompt lines were written since the last cycle
     run(ctl, "overheat")
     assert len(sent(adb_log, "-s 192.168.1.20:5555 shell input keyevent 4")) == 1
@@ -594,7 +596,8 @@ def test_black_screen_does_not_act_unless_playing_or_when_asleep_on_purpose(ctl,
     assert not sent(adb_log, "keyevent")
 
 
-def test_display_on_while_playing_is_only_written_to_the_probe_csv(ctl, tmp_path, adb_log):
+def test_display_on_while_playing_is_only_written_to_the_probe_csv(ctl, tmp_path, adb_log, monkeypatch):
+    monkeypatch.setattr(BlackScreen, "log_every_s", 0.0)  # throttling has its own test
     ctl.devices["hs0"].desired = {"mode": "playing"}
     arm(ctl, "black_screen")
     run(ctl, "black_screen", times=4)
@@ -606,7 +609,8 @@ def test_display_on_while_playing_is_only_written_to_the_probe_csv(ctl, tmp_path
     assert "hs0" in rows[1] and "ON" in rows[1] and "unsampled" in rows[1]
 
 
-def test_probe_csv_is_written_even_when_observe_only_or_braked(ctl, tmp_path):
+def test_probe_csv_is_written_even_when_observe_only_or_braked(ctl, tmp_path, monkeypatch):
+    monkeypatch.setattr(BlackScreen, "log_every_s", 0.0)
     ctl.devices["hs0"].desired = {"mode": "playing"}
     ctl.watchdogs.set("black_screen", {"enabled": True})
     ctl.set_show_mode(True)
@@ -730,3 +734,577 @@ def test_start_and_stop_manage_one_task_per_watchdog(ctl):
         await ctl.watchdogs.stop()
         assert all(t.done() for t in tasks)
     asyncio.run(go())
+
+
+# =========================================================== safety review fixes
+
+import json  # noqa: E402
+
+from syncvr.fleetops import ListingFailed  # noqa: E402
+
+
+def hist(ctl, name, dev="hs0"):
+    return list(ctl.watchdogs.states[name].history[dev])
+
+
+def mem(ctl, name, dev="hs0"):
+    return ctl.watchdogs.states[name].mem[dev]
+
+
+# ---- 1/2: attempts are recorded before they run, and outlive the 20-entry history
+
+def test_a_send_that_raises_still_counts_for_the_give_up_limit(ctl, adb_log, monkeypatch):
+    monkeypatch.setenv("FAKE_ADB_WINDOW", "window_anr")
+    calls = []
+
+    def boom(serial):
+        calls.append(serial)
+        raise RuntimeError("adb: device offline")
+    monkeypatch.setattr(ctl.fleet, "back", boom)
+    arm(ctl, "popup")
+    run(ctl, "popup", times=6, step=10)
+    assert len(calls) == 3  # gave up after max_failures, not retried forever
+    st = ctl.watchdogs.states["popup"]
+    assert all("back" in e["sent"] for e in hist(ctl, "popup")[:3])
+    assert [e["failed"] for e in hist(ctl, "popup")[:3]] == [["back"]] * 3
+    assert st.counters["send_failed"] == 3 and mem(ctl, "popup")["failures"] == 3
+    assert len([e for e in ctl.events if "device offline" in e["message"]]) == 1  # logged once, not per cycle
+
+
+def test_failures_and_give_up_survive_more_than_twenty_cycles(ctl, adb_log, monkeypatch):
+    monkeypatch.setenv("FAKE_ADB_WINDOW", "window_anr")
+    arm(ctl, "popup")
+    run(ctl, "popup", times=30, step=10)
+    assert len(sent(adb_log, "keyevent 4")) == 3
+    assert len(hist(ctl, "popup")) == watchdogs.HISTORY_LEN
+    assert mem(ctl, "popup")["failures"] == 3
+
+
+def test_cooldown_does_not_depend_on_the_history_deque(ctl, adb_log, monkeypatch):
+    monkeypatch.setenv("FAKE_ADB_CONNECT_FAIL", "10.9.9.9:5555")
+    c = make_ctl(ctl.data_dir / "k", ips=(("10.9.9.9", "S3"),)) if (ctl.data_dir / "k").mkdir() is None else None
+    arm(c, "keepalive")
+    run(c, "keepalive", times=50, step=1)  # 50 s: the first attempt is long out of the 20-entry deque
+    assert len(sent(adb_log, "connect 10.9.9.9")) == 1
+    assert watchdogs.last_sent([], ("wake",), 100.0, {"wake": 90.0}) == 10.0
+    assert watchdogs.last_sent([entry(t=95, sent=["wake"])], ("wake",), 100.0, {"wake": 90.0}) == 5.0
+
+
+def test_keepalive_backs_off_exponentially(tmp_path, adb_log, monkeypatch):
+    monkeypatch.setenv("FAKE_ADB_CONNECT_FAIL", "10.9.9.9:5555")
+    c = make_ctl(tmp_path, ips=(("10.9.9.9", "S3"),))
+    arm(c, "keepalive")
+    run(c, "keepalive", step=40)  # attempt 1 (t=0), fails -> next after 60 s
+    run(c, "keepalive", step=40)  # t=40: too early
+    assert len(sent(adb_log, "connect 10.9.9.9")) == 1
+    run(c, "keepalive", step=40)  # t=80: second attempt
+    assert len(sent(adb_log, "connect 10.9.9.9")) == 2
+    assert mem(c, "keepalive")["connect_fails"] == 2
+    assert Keepalive.retry_delay({"retry_s": 30.0}, 0) == 30 and Keepalive.retry_delay({"retry_s": 30.0}, 9) == 900
+
+
+def test_keepalive_connect_that_raises_counts_as_an_attempt(tmp_path, adb_log, monkeypatch):
+    c = make_ctl(tmp_path, ips=(("10.9.9.9", "S3"),))
+    n = []
+    monkeypatch.setattr(c.fleet, "connect", lambda a: n.append(a) or (_ for _ in ()).throw(OSError("boom")))
+    arm(c, "keepalive")
+    run(c, "keepalive", times=3, step=5)
+    assert len(n) == 1
+
+
+# ---- 3: ambiguous addresses
+
+def test_an_address_claimed_by_two_headsets_is_never_acted_on(tmp_path, adb_log, monkeypatch):
+    monkeypatch.setenv("FAKE_ADB_WAKEFULNESS", "Asleep")
+    c = make_ctl(tmp_path, ips=(("192.168.1.20", "S1"), ("192.168.1.20", "S2")))
+    arm(c, "stay_awake")
+    run(c, "stay_awake", times=2)
+    assert not sent(adb_log, "keyevent")
+    assert sum("claimed by 2" in e["message"] for e in c.events) == 2  # once per headset, not per cycle
+
+
+def test_a_reported_serial_is_preferred_over_a_duplicated_ip(tmp_path, adb_log, monkeypatch):
+    monkeypatch.setenv("FAKE_ADB_WAKEFULNESS", "Asleep")
+    c = make_ctl(tmp_path, ips=(("192.168.1.20", "USB123"), ("192.168.1.20", "S2")))
+    arm(c, "stay_awake")
+    run(c, "stay_awake")
+    assert len(sent(adb_log, "-s USB123 shell input keyevent 224")) == 1
+    assert not sent(adb_log, "-s 192.168.1.20:5555")
+
+
+def test_keepalive_does_not_connect_an_ambiguous_address(tmp_path, adb_log):
+    c = make_ctl(tmp_path, ips=(("10.9.9.9", "S3"), ("10.9.9.9", "S4")))
+    arm(c, "keepalive")
+    run(c, "keepalive")
+    assert not sent(adb_log, "connect")
+
+
+# ---- 4: listing failures and implausible gaps
+
+def test_a_failed_adb_devices_skips_the_cycle(tmp_path, adb_log, monkeypatch):
+    c = make_ctl(tmp_path, ips=(("10.9.9.9", "S3"),))
+    arm(c, "keepalive")
+
+    def failing():
+        raise ListingFailed("adb: command not found")
+    monkeypatch.setattr(c.fleet, "listed_checked", failing)
+    run(c, "keepalive", times=3)
+    st = c.watchdogs.states["keepalive"]
+    assert st.counters["listing_failed"] == 3 and st.counters["errors"] == 0
+    assert "skipped" in st.last_summary and "adb devices" in st.last_summary
+    assert not sent(adb_log, "connect") and not st.history
+    assert sum("adb devices" in e["message"] for e in c.events) == 1
+
+
+def test_a_listing_failure_is_distinguishable_from_an_empty_listing(tmp_path, monkeypatch):
+    fleet = AdbFleet(Adb(FAKE_ADB))
+    monkeypatch.setenv("FAKE_ADB_DEVICES", str(tmp_path / "missing.txt"))  # cat fails, adb prints nothing
+    monkeypatch.setattr(fleet.adb, "devices", lambda: (_ for _ in ()).throw(RuntimeError("adb: no server")))
+    with pytest.raises(ListingFailed):
+        fleet.listed_checked()
+    assert fleet.listed() == set()
+    monkeypatch.undo()
+    empty = tmp_path / "empty.txt"
+    empty.write_text("List of devices attached\n\n")
+    monkeypatch.setenv("FAKE_ADB_DEVICES", str(empty))
+    assert fleet.listed_checked() == set()
+
+
+def test_keepalive_skips_when_most_of_a_large_fleet_looks_missing(tmp_path, adb_log):
+    ips = (("192.168.1.20", "S1"),) + tuple((f"10.0.0.{i}", f"T{i}") for i in range(1, 7))
+    c = make_ctl(tmp_path, ips=ips)  # 7 headsets, only the first is in adb devices
+    arm(c, "keepalive")
+    run(c, "keepalive")
+    assert not sent(adb_log, "connect")
+    st = c.watchdogs.states["keepalive"]
+    assert st.counters["implausible"] == 1 and "6 of 7" in st.last_summary
+    assert any("looks like an adb problem" in e["message"] for e in c.events)
+
+
+def test_keepalive_still_works_for_a_few_missing_in_a_small_fleet(tmp_path, adb_log):
+    c = make_ctl(tmp_path, ips=(("192.168.1.20", "S1"), ("10.0.0.1", "T1"), ("10.0.0.2", "T2")))
+    arm(c, "keepalive")
+    run(c, "keepalive")
+    assert len(sent(adb_log, "connect 10.0.0.1")) == 1
+
+
+# ---- 5: user regexes
+
+@pytest.mark.parametrize("pattern, word", [
+    ("(a+)+$", "catastrophically"), ("(a|aa)+b", "catastrophically"), (r"(x)\1", "backreference"),
+    ("x" * 201, "longer than"), ("a*", "empty string"), ("(", "valid regular"),
+])
+def test_unsafe_patterns_are_refused(pattern, word):
+    assert word in watchdogs.pattern_problem(pattern)
+    assert watchdogs._regex(pattern) is None
+
+
+def test_reasonable_patterns_are_accepted():
+    assert watchdogs.pattern_problem("OverheatPrompt|temperature critical") is None
+    assert watchdogs.pattern_problem(r"Window #\d+ .*Overheat") is None
+
+
+def test_settings_refuse_unsafe_or_overlong_patterns(ctl):
+    wd = ctl.watchdogs
+    for bad in ("(a+)+$", "x" * 201, "ab", "("):
+        with pytest.raises(WatchdogError):
+            wd.set("overheat", {"cfg": {"pattern": bad}})
+        with pytest.raises(WatchdogError):
+            wd.set("popup", {"cfg": {"evidence": bad}})
+    err = None
+    try:
+        wd.set("overheat", {"cfg": {"pattern": "(a+)+$"}})
+    except WatchdogError as exc:
+        err = str(exc)
+    assert err.startswith("pattern ")
+
+
+def test_guarded_search_treats_running_out_of_time_as_no_match():
+    ticks = iter(range(100))
+    regex = watchdogs.re.compile("needle")
+    lines = ["hay"] * 5 + ["needle"]
+    assert watchdogs.guarded_search(regex, lines, budget_s=2.5, clock=lambda: next(ticks)) == (False, True)
+    assert watchdogs.guarded_search(regex, lines) == (True, False)
+    long_line = "x" * 5000 + "needle"  # cut to MAX_LINE_LEN before matching
+    assert watchdogs.guarded_search(regex, [long_line]) == (False, False)
+
+
+def test_observe_matches_on_the_executor_not_the_event_loop(ctl, tmp_path, adb_log, monkeypatch):
+    monkeypatch.setenv("FAKE_ADB_LOGCAT", str(FX / "logcat_overheat.txt"))
+    monkeypatch.setenv("FAKE_ADB_WINDOW", "window_overheat")
+    confirmed_overheat(ctl, tmp_path)
+    threads = []
+    real = watchdogs.guarded_search
+
+    def spy(*a, **k):
+        threads.append(threading.current_thread() is threading.main_thread())
+        return real(*a, **k)
+    monkeypatch.setattr(watchdogs, "guarded_search", spy)
+    ctl.watchdogs.states["overheat"].cursors["hs0"] = "10-07 12:00:00.000"
+    run(ctl, "overheat")
+    assert threads and not any(threads)
+    assert len(sent(adb_log, "keyevent 4")) == 1
+
+
+def test_a_matching_timeout_is_no_match_plus_one_log_line(ctl, tmp_path, adb_log, monkeypatch):
+    monkeypatch.setenv("FAKE_ADB_LOGCAT", str(FX / "logcat_overheat.txt"))
+    monkeypatch.setenv("FAKE_ADB_WINDOW", "window_overheat")
+    confirmed_overheat(ctl, tmp_path)
+    monkeypatch.setattr(watchdogs, "guarded_search", lambda *a, **k: (False, True))
+    ctl.watchdogs.states["overheat"].cursors["hs0"] = "10-07 12:00:00.000"
+    run(ctl, "overheat", times=3)
+    assert not sent(adb_log, "keyevent")
+    assert sum("ran out of time" in e["message"] for e in ctl.events) == 1
+
+
+def test_an_observation_that_hangs_is_given_up_on(ctl, monkeypatch):
+    monkeypatch.setattr(watchdogs, "OBSERVE_TIMEOUT_S", 0.1)
+    monkeypatch.setattr(StayAwake, "observe", lambda self, wd, dev, serial, tele: time.sleep(0.6) or {})
+    ctl.watchdogs.set("stay_awake", {"enabled": True})
+    t0 = time.monotonic()
+    run(ctl, "stay_awake")
+    assert time.monotonic() - t0 < 0.5
+    st = ctl.watchdogs.states["stay_awake"]
+    assert st.counters["errors"] == 1 and "longer than" in st.decisions[-1]["error"]
+
+
+# ---- 6: brake and asleep are re-checked on the send worker
+
+def test_a_brake_that_flips_while_the_send_waits_blocks_it_on_the_worker(ctl, adb_log, monkeypatch):
+    monkeypatch.setenv("FAKE_ADB_WAKEFULNESS", "Asleep")
+    names = []
+    monkeypatch.setattr(ctl, "brake", lambda: names.append(1) or (
+        "show_mode" if threading.current_thread().name.startswith("syncvr-wd-send") else None))
+    arm(ctl, "stay_awake")
+    run(ctl, "stay_awake", times=2)
+    assert not sent(adb_log, "keyevent")
+    d = last_decision(ctl, "stay_awake")
+    assert d["suppressed"] == "show_mode" and "not sent" in d["text"]
+    assert all(e["sent"] == [] and e["suppressed"] == "show_mode" for e in hist(ctl, "stay_awake"))
+    assert not mem(ctl, "stay_awake").get("sent_at", {}).get("wake")  # the record was rolled back
+
+
+def test_a_headset_put_to_sleep_while_the_send_waits_is_left_alone(ctl, adb_log, monkeypatch):
+    monkeypatch.setenv("FAKE_ADB_WAKEFULNESS", "Asleep")
+    arm(ctl, "stay_awake")
+    real = ctl.brake
+
+    def brake():
+        if threading.current_thread().name.startswith("syncvr-wd-send"):
+            ctl.intentionally_asleep.add("hs0")
+        return real()
+    monkeypatch.setattr(ctl, "brake", brake)
+    run(ctl, "stay_awake")
+    assert not sent(adb_log, "keyevent")
+    assert last_decision(ctl, "stay_awake")["suppressed"] == "intentionally asleep"
+
+
+def test_sends_run_on_the_dedicated_executor(ctl, adb_log, monkeypatch):
+    monkeypatch.setenv("FAKE_ADB_WAKEFULNESS", "Asleep")
+    seen = []
+    monkeypatch.setattr(ctl.fleet, "wake_screen", lambda s: seen.append(threading.current_thread().name) or "ok")
+    arm(ctl, "stay_awake")
+    run(ctl, "stay_awake")
+    assert seen and seen[0].startswith("syncvr-wd-send")
+
+
+# ---- 7: intentionally_asleep persists
+
+def test_intentionally_asleep_round_trips_and_ignores_unknown_ids(ctl, tmp_path):
+    ctl.intentionally_asleep.add("hs0")
+    data = json.loads(json.dumps(ctl.dump()))
+    assert data["intentionally_asleep"] == ["hs0"]
+    other = tmp_path / "b"
+    other.mkdir()
+    c2 = make_ctl(other)
+    data["intentionally_asleep"].append("ghost")
+    c2.load(data)
+    assert c2.intentionally_asleep == {"hs0"}
+    c2.load(dict(data, intentionally_asleep="garbage"))
+    assert c2.intentionally_asleep == set()
+
+
+def test_sleep_and_wake_mark_the_state_dirty(ctl, adb_log):
+    async def go():
+        ctl.dirty = False
+        ctl._act_sleep([ctl.devices["hs0"]], {})
+        assert ctl.dirty and "hs0" in ctl.intentionally_asleep
+        ctl.dirty = False
+        ctl._act_wake([ctl.devices["hs0"]], {})
+        assert ctl.dirty and "hs0" not in ctl.intentionally_asleep
+        await asyncio.sleep(0.3)
+    asyncio.run(go())
+
+
+# ---- 8: black screen needs worn is not False
+
+@pytest.mark.parametrize("worn, acts", [(False, False), (True, True), (None, True)])
+def test_black_screen_does_not_act_on_a_headset_that_is_not_worn(worn, acts):
+    got = BlackScreen.decide([SUSPECT, SUSPECT], black_obs(worn=worn), BLACK_CFG)
+    assert (kinds(got) == ["wake"]) is acts
+    assert BlackScreen.analyze(black_obs(worn=worn), BLACK_CFG)["suspect"] is acts
+
+
+def test_black_screen_observe_reports_worn(ctl, monkeypatch):
+    monkeypatch.setenv("FAKE_ADB_DISPLAY", "display_off")
+    ctl.devices["hs0"].desired = {"mode": "playing"}
+    ctl.devices["hs0"].status = {"worn": False}
+    arm(ctl, "black_screen")
+    run(ctl, "black_screen", times=4)
+    assert not sent_wakes(ctl)
+
+
+def sent_wakes(ctl):
+    return [e for e in hist(ctl, "black_screen") if e["sent"]]
+
+
+# ---- 9: the overheat logcat cursor
+
+def test_new_log_lines_handles_year_rollover_and_a_clock_that_stepped_back():
+    lines = ["12-31 23:59:58.000 a", "12-31 23:59:59.500 b", "01-01 00:00:01.000 c"]
+    fresh, newest, rebased = watchdogs.new_log_lines(lines, "12-31 23:59:59.000")
+    assert fresh == lines[1:] and newest == "01-01 00:00:01.000" and not rebased
+    fresh, newest, rebased = watchdogs.new_log_lines(["10-07 11:00:00.000 x"], "10-07 12:00:10.000")
+    assert fresh == [] and newest == "10-07 11:00:00.000" and rebased  # the cursor is in the future: re-baseline
+    assert watchdogs.new_log_lines(["10-07 12:00:10.000 x"], "10-07 12:00:10.000") == ([], "10-07 12:00:10.000", False)
+    assert watchdogs.new_log_lines(["garbage"], "10-07 12:00:10.000") == ([], "10-07 12:00:10.000", False)
+    assert watchdogs.new_log_lines(lines, None) == ([], "01-01 00:00:01.000", False)
+
+
+def test_a_cursor_ahead_of_the_device_clock_is_rebaselined_in_a_cycle(ctl, tmp_path, adb_log, monkeypatch):
+    monkeypatch.setenv("FAKE_ADB_LOGCAT", str(FX / "logcat_overheat.txt"))
+    monkeypatch.setenv("FAKE_ADB_WINDOW", "window_overheat")
+    confirmed_overheat(ctl, tmp_path)
+    st = ctl.watchdogs.states["overheat"]
+    st.cursors["hs0"] = "10-07 15:00:00.000"
+    run(ctl, "overheat")
+    assert st.cursors["hs0"] == "10-07 12:00:03.400" and not sent(adb_log, "keyevent")
+
+
+def test_the_baseline_is_not_stuck_when_the_newest_line_is_the_players_own(ctl, tmp_path, adb_log, monkeypatch):
+    log = tmp_path / "own.txt"
+    log.write_text("10-07 12:00:00.100  1  1 I Other: x\n10-07 12:00:09.900  1  1 I SyncVR  : tick\n")
+    monkeypatch.setenv("FAKE_ADB_LOGCAT", str(log))
+    confirmed_overheat(ctl, tmp_path)
+    run(ctl, "overheat")
+    assert ctl.watchdogs.states["overheat"].cursors["hs0"] == "10-07 12:00:09.900"
+
+
+def test_cursors_are_cleared_when_enabled_and_when_the_headset_is_unreachable(ctl, tmp_path, adb_log, monkeypatch):
+    monkeypatch.setenv("FAKE_ADB_LOGCAT", str(FX / "logcat_overheat.txt"))
+    confirmed_overheat(ctl, tmp_path)
+    st = ctl.watchdogs.states["overheat"]
+    run(ctl, "overheat")
+    assert st.cursors
+    monkeypatch.setattr(ctl.fleet, "listed_checked", lambda: {"USB123"})  # hs0 vanished from adb devices
+    run(ctl, "overheat")
+    assert "hs0" not in st.cursors
+    st.cursors["hs0"] = "10-07 12:00:00.000"
+    ctl.watchdogs.set("overheat", {"enabled": False})
+    ctl.watchdogs.set("overheat", {"enabled": True})
+    assert st.cursors == {}
+
+
+def test_enabling_resets_give_up_counts_but_not_cooldown_stamps(ctl):
+    wd = ctl.watchdogs
+    st = wd.states["popup"]
+    st.mem["hs0"] = {"failures": 3, "connect_fails": 4, "sent_at": {"back": 1.0}}
+    wd.set("popup", {"enabled": True})
+    assert st.mem["hs0"] == {"failures": 0, "connect_fails": 0, "sent_at": {"back": 1.0}}
+
+
+# ---- 10: bounds, disarm on change, hash
+
+@pytest.mark.parametrize("name, cfg", [
+    ("popup", {"max_failures": 0}), ("popup", {"max_failures": 11}), ("popup", {"launch_cooldown_s": 1}),
+    ("popup", {"crash_samples": 0}), ("popup", {"verify_delay_s": 100}), ("black_screen", {"samples": 0}),
+    ("black_screen", {"cooldown_s": 1}), ("keepalive", {"retry_s": 1}), ("overheat", {"cooldown_s": 0}),
+    ("overheat", {"verify_delay_s": 0}), ("stay_awake", {"interval_s": 0.5}),
+    ("overheat", {"package": "not a package"}), ("overheat", {"exclude": "ab"}),
+    ("overheat", {"exclude": ",".join(["abcd"] * 11)}), ("overheat", {"pattern_confirmed": "zz"}),
+])
+def test_settings_are_bounded(ctl, name, cfg):
+    with pytest.raises(WatchdogError):
+        ctl.watchdogs.set(name, {"enabled": True, "cfg": cfg})
+    assert not ctl.watchdogs.states[name].enabled
+
+
+def test_any_setting_change_disarms(ctl):
+    arm(ctl, "popup")
+    wd = ctl.watchdogs
+    assert wd.states["popup"].armed
+    wd.set("popup", {"cfg": {"interval_s": 10.0}})  # same value: not a change
+    assert wd.states["popup"].armed
+    wd.set("popup", {"cfg": {"interval_s": 20.0}})
+    assert not wd.states["popup"].armed and wd.states["popup"].enabled
+    arm(ctl, "popup")
+    wd.set("popup", {"cfg": {"max_failures": 5}})
+    assert not wd.states["popup"].armed
+    # asking to arm in the same request is a fresh arming and goes through the gate
+    wd.set("popup", {"armed": True, "testing": True, "cfg": {"max_failures": 4}})
+    assert wd.states["popup"].armed
+    with pytest.raises(WatchdogError, match="not marked as tested"):
+        wd.set("popup", {"armed": False})
+        wd.set("popup", {"armed": True, "cfg": {"max_failures": 3}})
+
+
+def test_confirmed_pattern_hash_covers_exclude_and_package(ctl, tmp_path):
+    confirmed_overheat(ctl, tmp_path)
+    wd = ctl.watchdogs
+    st = wd.states["overheat"]
+    assert st.armed and st.cfg["pattern_confirmed"] == Overheat.rule_hash(st.cfg)
+    for cfg in ({"exclude": "Other"}, {"package": "com.other.player"}):
+        arm(ctl, "overheat") if not st.armed else None
+        wd.set("overheat", {"cfg": cfg})
+        assert not st.armed and "confirmed" in wd.states["overheat"]["arm_blocker"] if False else not st.armed
+        assert "confirmed" in Overheat().arm_blocker(st.cfg)
+        wd.set("overheat", {"cfg": {"exclude": "", "package": PLAYER}})
+        st.cfg["pattern_confirmed"] = Overheat.rule_hash(st.cfg)
+    assert Overheat.rule_hash(dict(st.cfg, exclude="x1x")) != Overheat.rule_hash(st.cfg)
+    assert wd.to_json_one("overheat")["pattern_hash"] == Overheat.rule_hash(st.cfg)
+
+
+# ---- 11: popup launch needs an active desired mode
+
+@pytest.mark.parametrize("desired, want", [("playing", ["launch"]), ("paused", ["launch"]), ("stopped", []),
+                                          ("idle", []), (None, [])])
+def test_popup_launches_only_for_an_active_desired_mode(desired, want):
+    obs = popup_obs("window_home", online=False, desired=desired)
+    assert kinds(Popup.decide([entry(crash=True)], obs, POPUP_CFG)) == want
+
+
+# ---- 12: overheat confirmation and verification
+
+def test_confirming_needs_a_match_in_both_logcat_and_window_list(ctl, tmp_path):
+    folder = snapshot_folder(tmp_path, window="window_home")
+    with pytest.raises(CommandError, match="cannot confirm.*window.txt"):
+        ctl.watchdog_test_pattern("overheat", {"folder": str(folder), "pattern": PATTERN, "confirm": True})
+    assert ctl.watchdogs.states["overheat"].cfg["pattern_confirmed"] == ""
+    res = ctl.watchdog_test_pattern("overheat", {"folder": str(folder), "pattern": PATTERN})
+    assert res["by_file"] == {"logcat.txt": 2, "window.txt": 0} or res["by_file"]["window.txt"] == 0
+    ok = snapshot_folder(tmp_path, name="snap2")
+    assert ctl.watchdog_test_pattern("overheat", {"folder": str(ok), "pattern": PATTERN, "confirm": True})["confirmed"]
+
+
+def test_overheat_verifies_that_the_prompt_is_gone(ctl, tmp_path, adb_log, monkeypatch):
+    monkeypatch.setenv("FAKE_ADB_LOGCAT", str(FX / "logcat_overheat.txt"))
+    monkeypatch.setenv("FAKE_ADB_WINDOW", "window_overheat")
+    confirmed_overheat(ctl, tmp_path)
+    st = ctl.watchdogs.states["overheat"]
+    st.cursors["hs0"] = "10-07 12:00:00.000"
+    run(ctl, "overheat")
+    assert [d["verified"] for d in st.decisions if d.get("sent")] == [False]  # still on screen
+    real = ctl.fleet.back
+
+    def back(serial):
+        monkeypatch.setenv("FAKE_ADB_WINDOW", "window_home")
+        return real(serial)
+    monkeypatch.setattr(ctl.fleet, "back", back)
+    st.cursors["hs0"] = "10-07 12:00:00.000"
+    ctl.clock.t += 100  # past the cooldown
+    run(ctl, "overheat")
+    assert [d["verified"] for d in st.decisions if d.get("sent")][-1] is True
+
+
+def test_verify_is_not_success_when_the_headset_became_unreachable(ctl, monkeypatch):
+    wd, dev = ctl.watchdogs, ctl.devices["hs0"]
+    act = Action("back")
+    assert Popup().verify(wd, dev, None, act, {"online": True}, POPUP_CFG) is False
+    ov = dict(Overheat.defaults, pattern=PATTERN)
+    assert Overheat().verify(wd, dev, None, act, {}, ov) is False
+
+    def offline(serial, command, **kw):
+        raise RuntimeError("device offline")
+    monkeypatch.setattr(ctl.fleet, "shell", offline)
+    with pytest.raises(RuntimeError):
+        Overheat().verify(wd, dev, "192.168.1.20:5555", act, {}, ov)  # raises: the framework records NOT verified
+
+
+def test_a_verify_that_raises_is_recorded_as_not_verified(ctl, adb_log, monkeypatch):
+    monkeypatch.setenv("FAKE_ADB_WINDOW", "window_anr")
+    monkeypatch.setattr(Popup, "verify", lambda *a, **k: (_ for _ in ()).throw(RuntimeError("gone")))
+    arm(ctl, "popup")
+    run(ctl, "popup")
+    assert last_decision(ctl, "popup")["verified"] is False
+
+
+# ---- 13: probe CSV, pruning
+
+def test_probe_rows_are_throttled_per_headset(ctl, tmp_path):
+    ctl.devices["hs0"].desired = {"mode": "playing"}
+    ctl.watchdogs.set("black_screen", {"enabled": True})
+    run(ctl, "black_screen", times=5, step=30)  # 150 s < 300 s
+    rows = next((tmp_path / "probe").glob("*.csv")).read_text().splitlines()
+    assert len(rows) == 2
+    ctl.clock.t += 400
+    run(ctl, "black_screen")
+    assert len(next((tmp_path / "probe").glob("*.csv")).read_text().splitlines()) == 3
+
+
+def test_probe_rows_are_written_off_the_loop_thread(ctl, tmp_path, monkeypatch):
+    ctl.devices["hs0"].desired = {"mode": "playing"}
+    ctl.watchdogs.set("black_screen", {"enabled": True})
+    where = []
+    real = ctl.watchdogs.write_probe_row
+    monkeypatch.setattr(ctl.watchdogs, "write_probe_row",
+                        lambda d, r: where.append(threading.current_thread() is threading.main_thread()) or real(d, r))
+    run(ctl, "black_screen")
+    assert where == [False]
+
+
+def test_probe_csv_rotates_and_old_files_are_pruned(ctl, tmp_path, monkeypatch):
+    monkeypatch.setattr(watchdogs, "PROBE_MAX_BYTES", 300)
+    monkeypatch.setattr(watchdogs, "PROBE_KEEP_FILES", 3)
+    dev = ctl.devices["hs0"]
+    for _ in range(40):
+        ctl.watchdogs.write_probe_row(dev, {"display": "ON", "picture": "unsampled"})
+        time.sleep(0.002)
+    files = list((tmp_path / "probe").glob("probe_*.csv"))
+    assert 2 <= len(files) <= 3
+    assert all(f.stat().st_size < 600 for f in files)
+    assert all(f.read_text().startswith("time,device") for f in files)
+
+
+def test_state_for_removed_headsets_is_pruned(tmp_path, adb_log, monkeypatch):
+    c = make_ctl(tmp_path, ips=(("192.168.1.20", "S1"), ("", "USB123")))
+    monkeypatch.setenv("FAKE_ADB_FAIL", "USB123")
+    arm(c, "stay_awake")
+    run(c, "stay_awake")
+    st = c.watchdogs.states["stay_awake"]
+    st.cursors["hs1"] = "10-07 12:00:00.000"
+    assert {"hs0", "hs1"} <= set(st.history) and "hs1" in st.mem
+    assert any(k[1] == "hs1" for k in c.watchdogs._err_logged)
+    del c.devices["hs1"]
+    run(c, "stay_awake")
+    assert set(st.history) == {"hs0"} and set(st.mem) == {"hs0"} and "hs1" not in st.cursors
+    assert not any(k[1] == "hs1" for k in c.watchdogs._err_logged)
+
+
+# ---- LOW
+
+def test_pattern_confirmed_never_survives_a_restart(ctl, tmp_path):
+    confirmed_overheat(ctl, tmp_path)
+    data = json.loads(json.dumps(ctl.dump()))
+    assert data["watchdogs"]["overheat"]["cfg"]["pattern_confirmed"]  # in the file, but ignored on load
+    other = tmp_path / "c"
+    other.mkdir()
+    c2 = make_ctl(other)
+    c2.load(data)
+    st = c2.watchdogs.states["overheat"]
+    assert st.cfg["pattern"] == PATTERN and st.cfg["pattern_confirmed"] == "" and not st.armed
+    assert "confirmed" in st.armed and False if False else Overheat().arm_blocker(st.cfg)
+
+
+def test_test_pattern_reports_counts_per_file_and_uses_the_live_line_selection(tmp_path):
+    folder = snapshot_folder(tmp_path)
+    res = try_pattern(PATTERN, folder)
+    assert res["by_file"]["logcat.txt"] >= 1 and res["by_file"]["window.txt"] >= 1 and not res["timed_out"]
+    assert res["hash"] == pattern_hash(PATTERN)
+    assert try_pattern(PATTERN, folder, exclude=["Other"])["hash"] != res["hash"]
+    (folder / "logcat.txt").write_text("not a logcat line OverheatPrompt\n")  # no timestamp: not a log line
+    assert try_pattern(PATTERN, folder)["by_file"]["logcat.txt"] == 0
+    assert "catastrophically" in try_pattern("(a+)+$", folder)["error"]
+    assert "regular" in try_pattern("(", folder)["error"]
+    ticks = iter(range(1000))
+    slow = try_pattern(PATTERN, folder, budget_s=0.5, clock=lambda: next(ticks))
+    assert slow["timed_out"] and slow["error"]

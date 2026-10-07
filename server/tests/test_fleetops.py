@@ -445,3 +445,18 @@ def test_adbtool_cli_sleep_wake_refresh(adb_log, wake_state, monkeypatch, capsys
     assert cli("wake") == 0 and AdbFleet(Adb(FAKE_ADB)).wakefulness("S1") == "Awake"
     assert cli("refresh", "--min-asleep", "0") == 0
     assert capsys.readouterr().out.count("[ok ]") == 3
+
+
+def test_resolve_serials_refuses_shared_addresses_and_prefers_own_serial():
+    from syncvr.fleetops import resolve_serials
+
+    def d(i, ip, serial):
+        return SimpleNamespace(device_id=i, ip=ip, serial=serial)
+    listed = {"10.0.0.1:5555", "10.0.0.2:5555", "SER9"}
+    serials, notes = resolve_serials([d("a", "10.0.0.1", "x"), d("b", "10.0.0.2", "SER9"), d("c", "10.0.0.2", "y")],
+                                     listed)
+    assert serials == {"a": "10.0.0.1:5555", "b": "SER9", "c": None}
+    assert set(notes) == {"b", "c"} and "claimed by 2" in notes["c"]
+    serials, notes = resolve_serials([d("a", "10.0.0.1", ""), d("b", "10.0.0.1", "")], listed)
+    assert serials == {"a": None, "b": None} and len(notes) == 2
+    assert resolve_serials([d("a", "10.0.0.1", "")], set()) == ({"a": None}, {})
