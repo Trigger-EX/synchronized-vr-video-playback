@@ -5,7 +5,7 @@ from pathlib import Path
 
 from PySide6.QtCore import Qt, QTimer
 from PySide6.QtGui import QAction, QGuiApplication
-from PySide6.QtWidgets import (QCheckBox, QFileDialog, QFrame, QHBoxLayout, QLabel, QMainWindow, QMessageBox, QScrollArea, QSizePolicy, QTabWidget,
+from PySide6.QtWidgets import (QCheckBox, QDialog, QDialogButtonBox, QFileDialog, QFormLayout, QSpinBox, QFrame, QHBoxLayout, QLabel, QMainWindow, QMessageBox, QScrollArea, QSizePolicy, QTabWidget,
                                QVBoxLayout, QWidget)
 
 from ..launcher import load_overrides, open_path, save_override
@@ -13,7 +13,7 @@ from . import format as fmt
 from .headsets import HeadsetsTab
 from .library import LibraryTab
 from .log import LogTab
-from .mirror import MirrorManager, embed_supported, find_native_window
+from .mirror import BatchPreview, MirrorManager, embed_supported, find_native_window
 from .viewpane import ViewPane
 from .localplayer import LocalPlayer
 from .playback import PlaybackPanel
@@ -142,6 +142,20 @@ class MainWindow(QMainWindow):
         self.feed_action = feed_act
         for act in (view_act, pop_act, feed_act):
             file_menu.insertAction(file_menu.actions()[-1], act)
+        view_menu = self.menuBar().addMenu("&View")
+        self.capture_actions = {}
+        for key, text, handler in (("selected", "Capture &selected", lambda: self.capture(False)),
+                                   ("all", "Capture &all", lambda: self.capture(True)),
+                                   ("batch", "&Batch preview...", self.batch_preview_dialog),
+                                   ("close", "&Close all captures", self.close_captures)):
+            act = QAction(text, self)
+            act.triggered.connect(lambda _c=False, h=handler: h())
+            view_menu.addAction(act)
+            self.capture_actions[key] = act
+        self.batch = None
+        self._batch_timer = QTimer(self)
+        self._batch_timer.setInterval(1000)
+        self._batch_timer.timeout.connect(lambda: self.batch and self.batch.tick())
         toolbar = self.addToolBar("Headset")
         toolbar.setObjectName("toolbar")
         toolbar.addAction(view_act)
@@ -215,6 +229,71 @@ class MainWindow(QMainWindow):
         if device_id:
             self.mirror.stop(device_id)
         self.view_pane.close_view()
+
+    def screen_size(self):
+        screen = self.screen() or QGuiApplication.primaryScreen()
+        geo = screen.availableGeometry() if screen else None
+        return (geo.width(), geo.height()) if geo else (1920, 1080)
+
+    def _capture_devices(self, everything: bool) -> list:
+        devs = (self.snapshot or {}).get("devices") or []
+        if not everything and self.targets:
+            devs = [d for d in devs if d["id"] in self.targets]
+        return [{"id": d["id"], "ip": d.get("ip") or "", "label": d.get("label") or d["id"]}
+                for d in devs if d.get("online")]
+
+    def capture(self, everything: bool) -> None:
+        devs = self._capture_devices(everything)
+        if not devs:
+            self.statusBar().showMessage("No online headsets to capture.", STATUS_MS)
+            return
+        started = self.mirror.start_many(devs, screen=self.screen_size())
+        self.statusBar().showMessage("Capturing %d of %d headsets." % (len(started), len(devs)), STATUS_MS)
+
+    def batch_preview_dialog(self) -> None:
+        if self.batch and self.batch.running:
+            self.stop_batch()
+            return
+        dlg = QDialog(self)
+        dlg.setWindowTitle("Batch preview")
+        form = QFormLayout(dlg)
+        size, dwell = QSpinBox(), QSpinBox()
+        size.setRange(1, 6)
+        size.setValue(4)
+        dwell.setRange(1, 600)
+        dwell.setValue(10)
+        dwell.setSuffix(" s")
+        form.addRow("Headsets per group", size)
+        form.addRow("Seconds per group", dwell)
+        buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
+        buttons.accepted.connect(dlg.accept)
+        buttons.rejected.connect(dlg.reject)
+        form.addRow(buttons)
+        if dlg.exec() == QDialog.Accepted:
+            self.start_batch(size.value(), dwell.value())
+
+    def start_batch(self, group_size: int, dwell: float) -> bool:
+        devs = self._capture_devices(False)
+        if not devs:
+            self.statusBar().showMessage("No online headsets to preview.", STATUS_MS)
+            return False
+        size = self.screen_size()
+        self.batch = BatchPreview(
+            devs, group_size, dwell, lambda group: self.mirror.start_many(group, screen=size),
+            lambda group: [self.mirror.stop(d["id"]) for d in group])
+        self._batch_timer.start()
+        return self.batch.start()
+
+    def stop_batch(self) -> None:
+        self._batch_timer.stop()
+        if self.batch:
+            self.batch.stop()
+            self.batch = None
+
+    def close_captures(self) -> None:
+        self.stop_batch()
+        n = self.mirror.close_all()
+        self.statusBar().showMessage("Closed %d captures." % n, STATUS_MS)
 
     def on_mirror_ready(self, device_id: str) -> None:
         if device_id == self.view_pane.device_id:
@@ -326,6 +405,7 @@ class MainWindow(QMainWindow):
         self._mirror_timer.stop()
         self.local_player.stop()
         self.close_view()
+        self.stop_batch()
         self.mirror.stop_all()
         self.bridge.close()
         event.accept()

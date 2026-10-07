@@ -1,5 +1,7 @@
 """View a headset's screen with adb + scrcpy (the Go player cannot stream frames itself). No Qt in here."""
 
+import logging
+import math
 import os
 import shutil
 import subprocess
@@ -16,6 +18,10 @@ READY_TIMEOUT = 8.0
 LAUNCH_GAP = 0.3
 PORT_RANGE = "27183:27282"
 WM_CLASS = "SyncVR-view"
+BATCH_WM_CLASS = "SyncVR-batch"
+TILE_MAX_FPS = 15  # tiles stay light on the headsets (heat)
+MAX_PARALLEL = 6
+log = logging.getLogger(__name__)
 NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0) if sys.platform == "win32" else 0
 
 INSTALL_HELP = (
@@ -35,6 +41,69 @@ EYE_CROP = "1224:1232:0:104"
 MAX_SIZE = 480
 MAX_FPS = 30
 VIDEO_BIT_RATE = "2M"
+
+
+def tile_geometry(count: int, screen_w: int, screen_h: int) -> list:
+    """(x, y, w, h) per tile on a grid filling the screen; the column count that gives the largest tiles wins."""
+    if count <= 0 or screen_w <= 0 or screen_h <= 0:
+        return []
+    best = max(range(1, count + 1), key=lambda c: (min(screen_w / c, screen_h / math.ceil(count / c)), -c))
+    rows = math.ceil(count / best)
+    cw, ch = screen_w // best, screen_h // rows
+    return [((i % best) * cw, (i // best) * ch, cw, ch) for i in range(count)]
+
+
+class BatchPreview:
+    """Steps through groups of headsets: shows one group for `dwell` seconds, closes it, then opens the next
+    (wrapping around). `open_group(list)` / `close_group(list)` do the work; call `tick()` periodically. No Qt."""
+
+    def __init__(self, devices, group_size: int, dwell: float, open_group: Callable, close_group: Callable,
+                 clock: Callable = time.monotonic):
+        self.devices = list(devices)
+        self.group_size = max(1, int(group_size))
+        self.dwell = float(dwell)
+        self._open, self._close, self._clock = open_group, close_group, clock
+        self.index = -1
+        self.running = False
+        self._opened_at = 0.0
+
+    def groups(self) -> list:
+        n = self.group_size
+        return [self.devices[i:i + n] for i in range(0, len(self.devices), n)]
+
+    def current(self) -> list:
+        groups = self.groups()
+        return groups[self.index] if self.running and groups else []
+
+    def start(self) -> bool:
+        if self.running or not self.devices:
+            return False
+        self.running = True
+        self.index = -1
+        self.next()
+        return True
+
+    def next(self) -> None:
+        if not self.running:
+            return
+        groups = self.groups()
+        if self.index >= 0:
+            self._close(groups[self.index])
+        self.index = (self.index + 1) % len(groups)
+        self._opened_at = self._clock()
+        self._open(groups[self.index])
+
+    def tick(self) -> None:
+        if self.running and self._clock() - self._opened_at >= self.dwell:
+            self.next()
+
+    def stop(self) -> None:
+        if not self.running:
+            return
+        groups = self.groups()
+        if 0 <= self.index < len(groups):
+            self._close(groups[self.index])
+        self.running, self.index = False, -1
 
 
 def _exe_name(name: str) -> str:
@@ -143,6 +212,8 @@ class MirrorManager:
         self._clock, self._sleep = clock, sleep
         self._last_launch = None
         self._procs: Dict[str, _Entry] = {}
+        self._batch: set = set()  # device ids whose scrcpy this manager opened as a batch tile
+        self._flags_ok: Dict[str, bool] = {}
 
     def tool(self, name: str) -> Optional[str]:
         return find_tool(name, [self.tools_dir])
@@ -204,6 +275,91 @@ class MirrorManager:
         self._procs[device_id] = _Entry(p, name or device_id, self._last_launch)
         return True
 
+    def _supports_tiles(self, scrcpy: str) -> bool:
+        """scrcpy older than 1.x/2.x lacks --window-x; if `--help` cannot be read, assume it is supported."""
+        if scrcpy not in self._flags_ok:
+            try:
+                out = subprocess.run([scrcpy, "--help"], capture_output=True, text=True, timeout=5,
+                                     creationflags=NO_WINDOW)
+                text = (out.stdout or "") + (out.stderr or "")
+                self._flags_ok[scrcpy] = "--window-x" in text if isinstance(text, str) and text.strip() else True
+            except (OSError, subprocess.SubprocessError):
+                self._flags_ok[scrcpy] = True
+        return self._flags_ok[scrcpy]
+
+    def batch_running(self) -> list:
+        return [d for d in self._batch if self.is_running(d)]
+
+    def start_many(self, devices, max_parallel: int = MAX_PARALLEL, screen=(1920, 1080)) -> list:
+        """Open tiled, low-rate scrcpy windows for devices ({id, ip, label}). Skips headsets adb cannot reach and
+        refuses those beyond `max_parallel` tiles (counting tiles already open). Returns the ids started."""
+        devices = [d for d in devices if not self.is_running(d["id"])]
+        adb, scrcpy = self.tool("adb"), self.tool("scrcpy")
+        if not adb or not scrcpy:
+            missing = " and ".join(n for n, p in (("adb", adb), ("scrcpy", scrcpy)) if not p)
+            self.on_error("Capture", "%s not found.\n\n%s" % (missing, INSTALL_HELP))
+            return []
+        room = max(0, max_parallel - len(self.batch_running()))
+        refused = []
+        if len(devices) > room:
+            refused, devices = devices[room:], devices[:room]
+            self.on_error("Capture", "At most %d captures run at once; not opened: %s. Close some, or use Batch "
+                          "preview to step through them." % (max_parallel, ", ".join(
+                              d.get("label") or d["id"] for d in refused)))
+        reachable = []
+        for dev in devices:
+            serial = "%s:%d" % (dev.get("ip") or "", ADB_PORT)
+            if not dev.get("ip") or not self._adb_connect(adb, serial):
+                log.info("capture: skipping %s, not reachable by adb (%s)", dev.get("label") or dev["id"], serial)
+                continue
+            reachable.append((dev, serial))
+        geo = tile_geometry(len(reachable) + len(self.batch_running()), *screen)[len(self.batch_running()):]
+        tiles = self._supports_tiles(scrcpy) if reachable else False
+        started = []
+        for (dev, serial), rect in zip(reachable, geo):
+            name = dev.get("label") or dev["id"]
+            cmd = [scrcpy, "-s", serial, "--port", PORT_RANGE, "--window-title", self.title(name),
+                   "--max-size", str(MAX_SIZE), "--max-fps", str(TILE_MAX_FPS), "--video-bit-rate", VIDEO_BIT_RATE,
+                   "--no-audio", "--no-mipmaps", "--video-buffer=0", "--stay-awake"]
+            if tiles:
+                cmd += ["--window-x", str(rect[0]), "--window-y", str(rect[1]),
+                        "--window-width", str(rect[2]), "--window-height", str(rect[3])]
+            if not self.full_feed:
+                cmd += ["--crop", EYE_CROP]
+            env = dict(os.environ, ADB=adb, ANDROID_SERIAL=serial, SDL_VIDEO_X11_WMCLASS=BATCH_WM_CLASS,
+                       SDL_VIDEO_WAYLAND_WMCLASS=BATCH_WM_CLASS)
+            if self._last_launch is not None:
+                self._sleep(max(0.0, LAUNCH_GAP - (self._clock() - self._last_launch)))
+            try:
+                p = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, env=env,
+                                     creationflags=NO_WINDOW)
+            except OSError as e:
+                self.on_error("Capture", "Could not run scrcpy: %s" % e)
+                break
+            self._last_launch = self._clock()
+            self._reap(dev["id"])
+            self._procs[dev["id"]] = _Entry(p, name, self._last_launch)
+            self._batch.add(dev["id"])
+            started.append(dev["id"])
+        return started
+
+    def _adb_connect(self, adb: str, serial: str) -> bool:
+        try:
+            proc = subprocess.run([adb, "connect", serial], capture_output=True, text=True,
+                                  timeout=CONNECT_TIMEOUT, creationflags=NO_WINDOW)
+        except (OSError, subprocess.SubprocessError):
+            return False
+        out = ((proc.stdout or "") + (proc.stderr or "")).lower()
+        return proc.returncode == 0 and "connected to" in out and "cannot" not in out and "failed" not in out
+
+    def close_all(self) -> int:
+        """Stop every batch/tile scrcpy this manager opened (not the single docked view). Returns how many."""
+        ids = [d for d in self._batch if d in self._procs]
+        for device_id in ids:
+            self.stop(device_id)
+        self._batch.clear()
+        return len(ids)
+
     @staticmethod
     def title(name: str) -> str:
         return "SyncVR - %s" % name
@@ -238,6 +394,7 @@ class MirrorManager:
             except subprocess.TimeoutExpired:
                 entry.proc.kill()
         self._procs.pop(device_id, None)
+        self._batch.discard(device_id)
 
     def stop_all(self) -> None:
         for device_id in list(self._procs):

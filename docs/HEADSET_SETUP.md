@@ -227,3 +227,14 @@ Known suspects, so you know what to look for:
 * **Black in mode 2 only:** look for `updateTexImage` or `Sphere` errors in the log.
 * **`vrapi_EnterVrMode failed` repeating**, or `Render thread still in VR mode` after taking
   the headset off: note when it happened.
+
+## Viewing several headsets at once (operator panel)
+
+The panel's **View** menu opens scrcpy mirrors (needs adb and scrcpy, and `adb tcpip 5555` once per headset):
+
+* **Capture selected / Capture all** tiles one window per online headset across the screen (15 fps, one eye).
+  At most 6 run at once; extras are refused with a message. Headsets adb cannot reach are skipped and logged.
+* **Batch preview...** shows N headsets for a set number of seconds, closes them, then shows the next group.
+* **Close all captures** closes every window the panel opened this way (not the docked single view).
+
+Batch windows use the window class `SyncVR-batch`. If scrcpy is too old for `--window-x`, windows open untiled.
