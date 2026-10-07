@@ -4,8 +4,10 @@
 that dozens of headsets never mean dozens of simultaneous adb processes.
 """
 
+import re
 import subprocess
 import threading
+import time
 from concurrent.futures import ThreadPoolExecutor
 from typing import Iterable, Optional, Set
 
@@ -13,6 +15,14 @@ from .adbtool import Adb
 
 MAX_WORKERS = 10
 ADB_PORT = 5555
+
+KEYEVENT_SLEEP = 223  # KEYCODE_SLEEP: screen off, never toggles
+KEYEVENT_WAKEUP = 224  # KEYCODE_WAKEUP: screen on, never toggles
+WAKEFULNESS_CMD = "dumpsys power | grep mWakefulness"
+POLL_TIMEOUT_S = 3.0
+POLL_INTERVAL_S = 0.2
+MIN_ASLEEP_S = 1.0
+_WAKEFULNESS = re.compile(r"mWakefulness=(\w+)")
 
 _executor: Optional[ThreadPoolExecutor] = None
 _executor_lock = threading.Lock()
@@ -69,3 +79,49 @@ class AdbFleet:
 
     def submit(self, fn, *args):
         return self.executor.submit(fn, *args)
+
+    # ------------------------------------------------------------- power
+
+    clock = staticmethod(time.monotonic)
+    sleeper = staticmethod(time.sleep)
+
+    def sleep_screen(self, serial: str) -> str:
+        self.shell(serial, f"input keyevent {KEYEVENT_SLEEP}")
+        return "sleep sent"
+
+    def wake_screen(self, serial: str) -> str:
+        self.shell(serial, f"input keyevent {KEYEVENT_WAKEUP}")
+        return "wake sent"
+
+    def wakefulness(self, serial: str) -> str:
+        """``Awake``, ``Asleep``, ``Dozing``, ``Dreaming`` or ``unknown`` (unparseable output)."""
+        match = _WAKEFULNESS.search(self.shell(serial, WAKEFULNESS_CMD))
+        return match.group(1) if match else "unknown"
+
+    def wait_wakefulness(self, serial: str, want: str, timeout_s: float = POLL_TIMEOUT_S,
+                         interval_s: float = POLL_INTERVAL_S) -> bool:
+        deadline = self.clock() + timeout_s
+        while True:
+            if self.wakefulness(serial) == want:
+                return True
+            if self.clock() >= deadline:
+                return False
+            self.sleeper(interval_s)
+
+    def screen_refresh(self, serial: str, min_asleep_s: float = MIN_ASLEEP_S,
+                       timeout_s: float = POLL_TIMEOUT_S) -> str:
+        """One sleep, confirm Asleep, hold ``min_asleep_s``, one wake, confirm Awake."""
+        self.shell(serial, f"input keyevent {KEYEVENT_SLEEP}")
+        if not self.wait_wakefulness(serial, "Asleep", timeout_s):
+            raise RuntimeError(f"screen did not go to sleep within {timeout_s:g} s")
+        self.sleeper(max(0.0, float(min_asleep_s)))
+        self.shell(serial, f"input keyevent {KEYEVENT_WAKEUP}")
+        if not self.wait_wakefulness(serial, "Awake", timeout_s):
+            raise RuntimeError(f"screen did not wake within {timeout_s:g} s")
+        return "refreshed"
+
+    def poweroff(self, serial: str, dry_run: bool = True) -> str:
+        if dry_run:
+            return "would power off (dry run, nothing sent)"
+        self.shell(serial, "reboot -p")
+        return "power off sent"

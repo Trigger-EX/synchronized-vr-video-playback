@@ -108,9 +108,9 @@ QLabel#error { color: %(bad)s; }
 QLabel#mono { font-family: "DejaVu Sans Mono", Menlo, Consolas, monospace; }
 QLabel[drift="good"] { color: %(ok)s; } QLabel[drift="meh"] { color: %(warn)s; } QLabel[drift="poor"] { color: %(bad)s; }
 
-QGroupBox#playback { background: %(surface)s; border: 1px solid %(border)s; border-radius: 12px;
+QGroupBox#playback, QGroupBox#toolCard { background: %(surface)s; border: 1px solid %(border)s; border-radius: 12px;
                      margin-top: 0; padding: 18px 12px 12px 12px; }
-QGroupBox#playback::title { subcontrol-origin: padding; subcontrol-position: top left; left: 14px; top: 4px;
+QGroupBox#playback::title, QGroupBox#toolCard::title { subcontrol-origin: padding; subcontrol-position: top left; left: 14px; top: 4px;
                             color: %(muted)s; font-size: 9pt; font-weight: 700; }
 QLabel#target { font-weight: 600; }
 QLabel#now { color: %(muted)s; }

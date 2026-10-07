@@ -8,6 +8,7 @@ class FakeBridge(QObject):
     result = Signal(str, object)
     failed = Signal(str)
     stopped = Signal()
+    previewed = Signal(str, object, object)
 
     def __init__(self):
         super().__init__()
@@ -17,6 +18,15 @@ class FakeBridge(QObject):
 
     def command(self, action, targets, **params):
         self.calls.append((action, targets, params))
+
+    def preview(self, action, targets, **params):
+        self.calls.append(("preview", action, targets, params))
+
+    def confirmed_command(self, action, targets, **params):
+        self.calls.append(("confirmed", action, targets, params))
+
+    def set_feature_tested(self, key, tested):
+        self.calls.append(("set_feature_tested", key, tested))
 
     def update_device(self, device_id, changes):
         self.calls.append(("update_device", device_id, changes))

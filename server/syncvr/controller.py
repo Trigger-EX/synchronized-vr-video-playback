@@ -21,7 +21,7 @@ from dataclasses import dataclass, field
 from typing import Any, Callable, Dict, Iterable, List, Optional
 
 from . import __version__, features
-from .fleetops import AdbFleet
+from .fleetops import MIN_ASLEEP_S, AdbFleet
 from .library import Library, Video
 from .protocol import DEFAULT_SYNC_SETTINGS, server_clock, validate_settings
 
@@ -46,6 +46,7 @@ ANCHOR_SANITY_S = 2.0
 PLAYBACK_ACTIONS = ("load", "play", "pause", "seek", "stop")
 MAX_JOBS_KEPT = 20
 PREVIEW_NAMES_SHOWN = 8
+POWER_ACTIONS = frozenset({"sleep", "wake", "screen_refresh", "poweroff"})
 
 
 class CommandError(Exception):
@@ -248,6 +249,15 @@ class Controller:
         self.gated_actions: Dict[str, str] = {}
         self.confirm_actions: set = set()
         self.action_labels: Dict[str, str] = {}
+        self.preview_warnings: Dict[str, Callable[[List[Device], dict], List[str]]] = {}
+        self._job_failed_cbs: Dict[str, Callable[[str], None]] = {}
+        # headsets an operator put to sleep on purpose; stay-awake style watchdogs must leave them alone
+        self.intentionally_asleep: set = set()
+        self.gated_actions["poweroff"] = "power.poweroff"
+        self.confirm_actions.update(POWER_ACTIONS)
+        self.action_labels.update({"sleep": "Sleep", "wake": "Wake", "screen_refresh": "Screen refresh",
+                                   "poweroff": "Power off"})
+        self.preview_warnings["screen_refresh"] = self._refresh_warnings
         self.loop: Optional[asyncio.AbstractEventLoop] = None  # where job results are marshalled to
         self.jobs: "OrderedDict[str, dict]" = OrderedDict()
         self.server_name = server_name
@@ -346,12 +356,17 @@ class Controller:
             "events": list(self.events)[-150:],
             "features": features.describe(self.tested_features),
             "jobs": [dict(j, results=list(j["results"])) for j in self.jobs.values()],
+            "asleep": sorted(i for i in self.intentionally_asleep if i in self.devices),
         }
 
     # ------------------------------------------------------------------- jobs
 
-    def start_job(self, action: str, items: List[tuple], fn: Callable[[str], Any]) -> dict:
+    def start_job(self, action: str, items: List[tuple], fn: Callable[[str], Any],
+                  on_failed: Optional[Callable[[str], None]] = None) -> dict:
         """Run ``fn(adb_serial)`` for each ``(device, serial)`` on the shared executor.
+
+        An item whose serial is None is reported as unreachable without running ``fn``. ``on_failed(device_id)``
+        runs on the loop thread for each headset that failed or was unreachable.
 
         Returns ``{"job": id}`` at once. Each result is marshalled back to the event loop thread with
         call_soon_threadsafe, where it becomes one OK/FAILED log line; workers never touch controller state.
@@ -366,14 +381,16 @@ class Controller:
         job_id = uuid.uuid4().hex[:8]
         self.jobs[job_id] = {"id": job_id, "action": action, "state": "running", "total": len(items),
                              "done": 0, "failed": 0, "started": time.time(), "results": []}
+        if on_failed is not None:
+            self._job_failed_cbs[job_id] = on_failed
         while len(self.jobs) > MAX_JOBS_KEPT:
-            self.jobs.popitem(last=False)
+            self._job_failed_cbs.pop(self.jobs.popitem(last=False)[0], None)
 
-        def work(dev_id: str, serial: str) -> None:
-            try:
-                ok, message = True, str(fn(serial) or "")
-            except Exception as exc:  # a failing headset must not take the job down
-                ok, message = False, str(exc) or type(exc).__name__
+        def work(dev_id: str, serial: Optional[str]) -> None:
+            if serial is None:
+                ok, message = False, "unreachable (not reachable by adb)"
+            else:
+                ok, message = self._run_one(fn, serial)
             try:
                 loop.call_soon_threadsafe(self._job_result, job_id, dev_id, ok, message)
             except RuntimeError:
@@ -384,6 +401,13 @@ class Controller:
         self.changed()
         return {"job": job_id}
 
+    @staticmethod
+    def _run_one(fn: Callable[[str], Any], serial: str) -> tuple:
+        try:
+            return True, str(fn(serial) or "")
+        except Exception as exc:  # a failing headset must not take the job down
+            return False, str(exc) or type(exc).__name__
+
     def _job_result(self, job_id: str, dev_id: str, ok: bool, message: str) -> None:
         job = self.jobs.get(job_id)
         if job is None:
@@ -393,6 +417,11 @@ class Controller:
         job["done"] += 1
         job["failed"] += not ok
         job["results"].append({"device": dev_id, "ok": ok, "message": message})
+        callback = self._job_failed_cbs.get(job_id)
+        if not ok and callback is not None:
+            callback(dev_id)
+        if job["done"] >= job["total"]:
+            self._job_failed_cbs.pop(job_id, None)
         if job["done"] >= job["total"]:
             job["state"] = "failed" if job["failed"] == job["total"] else "done"
         self.log_event("info" if ok else "error",
@@ -445,9 +474,31 @@ class Controller:
             if len(labels) > PREVIEW_NAMES_SHOWN:
                 names += f" and {len(labels) - PREVIEW_NAMES_SHOWN} more"
             scope = f"{verb} {len(targets)} headset{'s' if len(targets) != 1 else ''}: {names}"
-        return {"scope_text": scope, "labels": labels,
+        warnings = []
+        if action == "poweroff" and self._dry_run(params):
+            warnings.append("Dry run: nothing will be sent to the headsets.")
+        down = [d.label for d, serial in pairs if serial is None]
+        if down:
+            warnings.append(f"{len(down)} not reachable by adb: {', '.join(down[:PREVIEW_NAMES_SHOWN])}")
+        extra = self.preview_warnings.get(action)
+        if extra is not None:
+            warnings.extend(extra(targets, params))
+        return {"scope_text": scope, "labels": labels, "warnings": warnings,
+                "every": len(targets) == len(self.devices),
                 "token": self._token(action, pairs, self._dry_run(params)),
                 "needs_confirm": action in self.confirm_actions}
+
+    @staticmethod
+    def _is_playing(dev: Device) -> bool:
+        return bool((dev.desired or {}).get("mode") == "playing" or (dev.status or {}).get("state") == "playing")
+
+    def _refresh_warnings(self, targets: List[Device], params: dict) -> List[str]:
+        playing = [d.label for d in targets if self._is_playing(d)]
+        if not playing:
+            return []
+        names = ", ".join(playing[:PREVIEW_NAMES_SHOWN])
+        return [f"Screen refresh interrupts playback (visible hitch) on {len(playing)} playing "
+                f"headset{'s' if len(playing) != 1 else ''}: {names}"]
 
     def _guard(self, action: str, targets: List[Device], params: dict, listed=None) -> None:
         """Refuse gated actions that are untested, and confirm-required ones without a matching token."""
@@ -622,7 +673,7 @@ class Controller:
         if action in PLAYBACK_ACTIONS:
             self._cancel_recovery(targets)
         online = sum(1 for d in targets if d.online)
-        result = handler(targets, params) or {}
+        result = handler(targets, params if listed is None else dict(params, _listed=listed)) or {}
         self.changed()
         result.setdefault("targets", len(targets))
         result["online"] = online
@@ -663,6 +714,39 @@ class Controller:
         if video.duration:
             pos = min(pos, max(0.0, video.duration - 0.1))
         return pos
+
+    # ------------------------------------------------------------ power (adb jobs)
+
+    def _power_job(self, action: str, targets, params, fn, on_failed=None) -> dict:
+        return self.start_job(action, self.reachable(targets, params.get("_listed")), fn, on_failed)
+
+    def _act_sleep(self, targets, params):
+        ids = [d.device_id for d in targets]
+        self.intentionally_asleep.update(ids)  # before the first adb call, so no watchdog races the sleep
+        return self._power_job("sleep", targets, params, self.fleet.sleep_screen,
+                               on_failed=self.intentionally_asleep.discard)
+
+    def _act_wake(self, targets, params):
+        self.intentionally_asleep.difference_update(d.device_id for d in targets)
+        return self._power_job("wake", targets, params, self.fleet.wake_screen)
+
+    def _act_screen_refresh(self, targets, params):
+        self.intentionally_asleep.difference_update(d.device_id for d in targets)
+        min_asleep = max(0.0, min(30.0, float(params.get("min_asleep_s", MIN_ASLEEP_S))))
+        return self._power_job("screen_refresh", targets, params,
+                               lambda serial: self.fleet.screen_refresh(serial, min_asleep_s=min_asleep))
+
+    def _act_poweroff(self, targets, params):
+        dry = self._dry_run(params)
+        spec = params.get("targets")
+        every = spec in (None, "", "all") or len(targets) == len(self.devices)
+        if not dry and every and params.get("confirm_every") is not True:
+            raise CommandError("refusing to power off EVERY headset without the EVERY-headset confirmation; "
+                               "select specific headsets or confirm the 'EVERY headset' preview")
+        if dry:
+            self.log_event("info", f"poweroff dry run: would power off {len(targets)} headset"
+                                   f"{'s' if len(targets) != 1 else ''}: {', '.join(d.label for d in targets)}")
+        return self._power_job("poweroff", targets, params, lambda serial: self.fleet.poweroff(serial, dry_run=dry))
 
     def _act_load(self, targets, params):
         video = self._video(params.get("video"))

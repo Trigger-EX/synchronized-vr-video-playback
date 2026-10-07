@@ -263,3 +263,185 @@ def test_web_preview_and_feature_routes(ctl):
             assert "power.sleep" not in ctl.tested_features
             assert (await client.post("/api/features/bogus")).status == 400
     asyncio.run(go())
+
+
+# ------------------------------------------------------------------ P1: power
+
+@pytest.fixture
+def wake_state(tmp_path, monkeypatch):
+    d = tmp_path / "state"
+    d.mkdir()
+    monkeypatch.setenv("FAKE_ADB_STATE", str(d))
+    return d
+
+
+def fast_fleet():
+    fleet = AdbFleet(Adb(FAKE_ADB))
+    fleet.sleeper = staticmethod(lambda s: None)
+    return fleet
+
+
+def test_fake_adb_dumpsys_power(adb_log, wake_state, monkeypatch):
+    fleet = AdbFleet(Adb(FAKE_ADB))
+    assert fleet.wakefulness("S1") == "Awake"
+    fleet.shell("S1", "input keyevent 223")
+    assert fleet.wakefulness("S1") == "Asleep"
+    assert "mWakefulness=Asleep" in fleet.shell("S1", "dumpsys power")
+    monkeypatch.setenv("FAKE_ADB_STUCK", "S1")
+    fleet.shell("S1", "input keyevent 224")
+    assert fleet.wakefulness("S1") == "Asleep"
+
+
+def test_sleep_wake_send_keyevents(adb_log):
+    fleet = AdbFleet(Adb(FAKE_ADB))
+    fleet.sleep_screen("S1")
+    fleet.wake_screen("S1")
+    assert lines(adb_log) == ["-s S1 shell input keyevent 223", "-s S1 shell input keyevent 224"]
+
+
+def test_screen_refresh_sequence(adb_log, wake_state):
+    sleeps = []
+    fleet = AdbFleet(Adb(FAKE_ADB))
+    fleet.sleeper = staticmethod(sleeps.append)
+    assert fleet.screen_refresh("S1", min_asleep_s=1.5) == "refreshed"
+    cmds = [l.split(" shell ", 1)[1] for l in lines(adb_log)]
+    assert cmds[0] == "input keyevent 223" and cmds[-2] == "input keyevent 224"
+    assert cmds.count("input keyevent 223") == 1 and cmds.count("input keyevent 224") == 1
+    assert cmds[1:-2] == ["dumpsys power | grep mWakefulness"] * (len(cmds) - 3)
+    assert 1.5 in sleeps  # held asleep for min_asleep_s before the wake
+    assert fleet.wakefulness("S1") == "Awake"
+
+
+def test_screen_refresh_fails_when_never_asleep(adb_log, wake_state, monkeypatch):
+    monkeypatch.setenv("FAKE_ADB_STUCK", "S1")
+    ticks = iter(range(0, 1000))
+    fleet = AdbFleet(Adb(FAKE_ADB))
+    fleet.sleeper = staticmethod(lambda s: None)
+    fleet.clock = staticmethod(lambda: next(ticks) * 0.5)
+    with pytest.raises(RuntimeError, match="did not go to sleep within 3 s"):
+        fleet.screen_refresh("S1")
+    assert "input keyevent 224" not in " ".join(lines(adb_log))  # never woke a screen that did not sleep
+
+
+def test_poweroff_dry_run_sends_nothing(adb_log):
+    fleet = AdbFleet(Adb(FAKE_ADB))
+    assert "would power off" in fleet.poweroff("S1")
+    assert lines(adb_log) == []
+    fleet.poweroff("S1", dry_run=False)
+    assert lines(adb_log) == ["-s S1 shell reboot -p"]
+
+
+@pytest.fixture
+def pctl(ctl):
+    return ctl  # three headsets: S1 via ip, USB123 via usb, S3 (10.9.9.9, unreachable)
+
+
+def run_action(ctl, action, params):
+    async def go():
+        result = ctl.execute(action, params)
+        for _ in range(300):
+            await asyncio.sleep(0.02)
+            if all(j["state"] != "running" for j in ctl.jobs.values()):
+                break
+        return result
+    return asyncio.run(go())
+
+
+def confirm(ctl, action, params):
+    return ctl.preview(dict(params, action=action))["token"]
+
+
+def test_sleep_wake_jobs_and_intentionally_asleep(pctl, adb_log, wake_state):
+    t = ["hs0", "hs1"]
+    assert pctl.preview({"action": "sleep", "targets": t})["scope_text"] == "Sleep 2 headsets: Go 0, Go 1"
+    assert pctl.preview({"action": "sleep", "targets": "all"})["scope_text"] == "Sleep EVERY headset (3)"
+    with pytest.raises(CommandError, match="confirmation"):
+        pctl.execute("sleep", {"targets": t})
+    run_action(pctl, "sleep", {"targets": t, "confirm": confirm(pctl, "sleep", {"targets": t})})
+    assert pctl.snapshot()["asleep"] == ["hs0", "hs1"]
+    assert sum(l.endswith("input keyevent 223") for l in lines(adb_log)) == 2
+    run_action(pctl, "wake", {"targets": ["hs0"], "confirm": confirm(pctl, "wake", {"targets": ["hs0"]})})
+    assert pctl.snapshot()["asleep"] == ["hs1"]
+    run_action(pctl, "screen_refresh", {"targets": ["hs1"], "min_asleep_s": 0,
+                                        "confirm": confirm(pctl, "screen_refresh", {"targets": ["hs1"]})})
+    assert pctl.snapshot()["asleep"] == []
+    assert pctl.fleet.wakefulness("USB123") == "Awake"
+
+
+def test_unreachable_headset_reported_and_not_marked_asleep(pctl, adb_log):
+    t = ["hs2"]
+    run_action(pctl, "sleep", {"targets": t, "confirm": confirm(pctl, "sleep", {"targets": t})})
+    assert pctl.snapshot()["asleep"] == []
+    job = pctl.snapshot()["jobs"][0]
+    assert job["failed"] == 1 and job["state"] == "failed"
+    assert any(e["message"].startswith("sleep: Go 2 FAILED (unreachable") for e in pctl.events)
+    assert all("keyevent" not in l for l in lines(adb_log))
+    assert any("not reachable by adb" in w for w in pctl.preview({"action": "sleep", "targets": t})["warnings"])
+
+
+def test_failed_sleep_clears_asleep_mark(pctl, monkeypatch):
+    monkeypatch.setenv("FAKE_ADB_FAIL", "USB123")
+    t = ["hs1"]
+    run_action(pctl, "sleep", {"targets": t, "confirm": confirm(pctl, "sleep", {"targets": t})})
+    assert pctl.intentionally_asleep == set()
+
+
+def test_refresh_preview_warns_for_playing_headset(pctl):
+    assert pctl.preview({"action": "screen_refresh", "targets": ["hs0"]})["warnings"] == []
+    pctl.devices["hs0"].status = {"state": "playing"}
+    warnings = pctl.preview({"action": "screen_refresh", "targets": ["hs0", "hs1"]})["warnings"]
+    assert len(warnings) == 1 and "interrupts playback" in warnings[0] and "Go 0" in warnings[0]
+    assert pctl.preview({"action": "sleep", "targets": ["hs0"]})["warnings"] == []
+
+
+def test_poweroff_gated_dry_run_default_and_every_guard(pctl, adb_log):
+    t = ["hs0", "hs1"]
+    p = pctl.preview({"action": "poweroff", "targets": t})
+    assert p["scope_text"] == "Power off 2 headsets: Go 0, Go 1" and p["needs_confirm"] and not p["every"]
+    assert any("Dry run" in w for w in p["warnings"])
+    with pytest.raises(CommandError, match="not marked as tested"):
+        pctl.execute("poweroff", {"targets": t, "confirm": p["token"]})
+    pctl.set_feature_tested("power.poweroff", True)
+    with pytest.raises(CommandError, match="confirmation"):
+        pctl.execute("poweroff", {"targets": t})
+    run_action(pctl, "poweroff", {"targets": t, "confirm": p["token"]})  # dry_run defaults to true
+    assert not any("reboot" in l for l in lines(adb_log))
+    msgs = [e["message"] for e in pctl.events]
+    assert any(m.startswith("poweroff dry run: would power off 2 headsets") for m in msgs)
+    assert any("poweroff: Go 0 OK (would power off" in m for m in msgs)
+
+    real = {"targets": t, "dry_run": False}
+    run_action(pctl, "poweroff", dict(real, confirm=confirm(pctl, "poweroff", real)))
+    assert sorted(l for l in lines(adb_log) if "reboot" in l) == [
+        "-s 192.168.1.20:5555 shell reboot -p", "-s USB123 shell reboot -p"]
+
+    for spec in ("all", None, ["hs0", "hs1", "hs2"]):
+        params = {"dry_run": False} if spec is None else {"targets": spec, "dry_run": False}
+        token = pctl.preview(dict(params, action="poweroff"))["token"]
+        with pytest.raises(CommandError, match="EVERY"):
+            pctl.execute("poweroff", dict(params, confirm=token))
+    every = {"targets": "all", "dry_run": False}
+    before = len([l for l in lines(adb_log) if "reboot" in l])
+    run_action(pctl, "poweroff", dict(every, confirm=confirm(pctl, "poweroff", every), confirm_every=True))
+    assert len([l for l in lines(adb_log) if "reboot" in l]) == before + 2  # S3 unreachable
+
+
+def test_poweroff_every_dry_run_allowed(pctl, adb_log):
+    p = {"targets": "all"}
+    run_action(pctl, "poweroff", dict(p, testing=True, confirm=confirm(pctl, "poweroff", p)))
+    assert not any("reboot" in l for l in lines(adb_log))
+
+
+def test_adbtool_cli_sleep_wake_refresh(adb_log, wake_state, monkeypatch, capsys):
+    import argparse
+    from syncvr import adbtool
+    monkeypatch.setattr("syncvr.fleetops.AdbFleet.sleeper", staticmethod(lambda s: None))
+
+    def cli(*argv):
+        p = argparse.ArgumentParser()
+        adbtool.add_arguments(p)
+        return adbtool.run(p.parse_args(["--adb", FAKE_ADB, "-s", "S1", *argv]))
+    assert cli("sleep") == 0 and AdbFleet(Adb(FAKE_ADB)).wakefulness("S1") == "Asleep"
+    assert cli("wake") == 0 and AdbFleet(Adb(FAKE_ADB)).wakefulness("S1") == "Awake"
+    assert cli("refresh", "--min-asleep", "0") == 0
+    assert capsys.readouterr().out.count("[ok ]") == 3

@@ -338,6 +338,14 @@ def run(args) -> int:
         return failures
     if cmd == "reboot":
         return for_each(serials, lambda s: adb.run(s, "reboot") or "rebooting")
+    if cmd in ("sleep", "wake", "refresh"):
+        from .fleetops import AdbFleet  # imported here: fleetops imports this module
+        fleet = AdbFleet(adb)
+        if cmd == "sleep":
+            return for_each(serials, fleet.sleep_screen)
+        if cmd == "wake":
+            return for_each(serials, fleet.wake_screen)
+        return for_each(serials, lambda s: fleet.screen_refresh(s, min_asleep_s=args.min_asleep))
     if cmd == "shell":
         command = " ".join(shlex.quote(a) for a in args.shell_command)
         return for_each(serials, lambda s: adb.shell(s, command, check=False))
@@ -383,5 +391,10 @@ def add_arguments(p: argparse.ArgumentParser) -> None:
     x.add_argument("--no-wait", action="store_true",
                    help=f"skip the {PERSIST_WAIT_S} s wait for Android to persist package state (do not reboot right away)")
     sub.add_parser("reboot", help="reboot the headsets")
+    sub.add_parser("sleep", help="turn the headset screens off (keyevent 223)")
+    sub.add_parser("wake", help="turn the headset screens on (keyevent 224)")
+    x = sub.add_parser("refresh", help="sleep, confirm asleep, wake, confirm awake (restores a stuck display)")
+    x.add_argument("--min-asleep", type=float, default=1.0, metavar="SECONDS",
+                   help="how long to keep the screen asleep before waking (default 1)")
     x = sub.add_parser("shell", help="run a shell command on every headset")
     x.add_argument("shell_command", nargs=argparse.REMAINDER)

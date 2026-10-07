@@ -19,8 +19,9 @@ from .localplayer import LocalPlayer
 from .playback import PlaybackPanel
 from .settings import SettingsTab
 from .theme import set_property
+from .tools import CommandConfirmer, ToolsTab
 
-TABS = ("Headsets", "Library", "Settings", "Log")
+TABS = ("Headsets", "Library", "Tools", "Settings", "Log")
 STATUS_MS = 5000
 
 
@@ -57,10 +58,11 @@ class MainWindow(QMainWindow):
         self.setMinimumSize(560, 360)
 
         self.tabs = QTabWidget()
+        self.confirmer = CommandConfirmer(self)
         self.headsets = HeadsetsTab(self)
         self.library = LibraryTab(self)
         self.tab_widgets = {"Headsets": self.headsets, "Library": self.library,
-                            "Settings": SettingsTab(self), "Log": LogTab(self)}
+                            "Tools": ToolsTab(self), "Settings": SettingsTab(self), "Log": LogTab(self)}
         for name in TABS:
             self.tabs.addTab(self.tab_widgets[name], name)
         self.local_player = local_player or LocalPlayer(bridge, getattr(config, "content_dir", "."), self.server_now)
@@ -289,6 +291,9 @@ class MainWindow(QMainWindow):
     def on_result(self, action: str, result) -> None:
         if result.get("warning"):
             self.statusBar().showMessage(result["warning"], STATUS_MS)
+        elif result.get("job"):
+            self.statusBar().showMessage("%s started; results are in the Log tab" % action.replace("_", " ").capitalize(),
+                                         STATUS_MS)
         elif action == "rescan":
             self.statusBar().showMessage("%d video(s) in library" % result.get("videos", 0), STATUS_MS)
 

@@ -2,6 +2,8 @@
 # Fake adb for tests. Appends its argv (one line per call) to $FAKE_ADB_LOG.
 #   FAKE_ADB_DEVICES  file that `adb devices` prints (default: ../fixtures/adb_devices.txt)
 #   FAKE_ADB_FAIL     space-separated serials whose commands exit 1 ("error: device offline")
+#   FAKE_ADB_STATE    directory for per-serial wakefulness files (see below); FAKE_ADB_WAKEFULNESS default state
+#   FAKE_ADB_STUCK    serials whose screen ignores keyevents 223/224
 #   FAKE_ADB_SLEEP    seconds every non-`devices` command takes (to exercise timeouts)
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 [ -n "$FAKE_ADB_LOG" ] && printf '%s\n' "$*" >> "$FAKE_ADB_LOG"
@@ -12,7 +14,26 @@ if [ "$1" = "devices" ]; then
   exit 0
 fi
 [ -n "$FAKE_ADB_SLEEP" ] && sleep "$FAKE_ADB_SLEEP"
+# Wakefulness: per-serial file in $FAKE_ADB_STATE (a directory) holding Awake or Asleep; default
+# $FAKE_ADB_WAKEFULNESS or Awake. `input keyevent 223/224` flips it unless $FAKE_ADB_STUCK lists the serial.
+state_file=""
+[ -n "$FAKE_ADB_STATE" ] && state_file="$FAKE_ADB_STATE/wake_${serial//[^A-Za-z0-9._-]/_}"
+wakefulness() { if [ -n "$state_file" ] && [ -f "$state_file" ]; then cat "$state_file"; else echo "${FAKE_ADB_WAKEFULNESS:-Awake}"; fi; }
 for bad in $FAKE_ADB_FAIL; do
   if [ "$bad" = "$serial" ]; then echo "error: device offline" >&2; exit 1; fi
 done
+if [ "$1" = "shell" ]; then
+  case "$2" in
+    "dumpsys power"*)
+      fixture="$here/../fixtures/dumpsys/power_$(wakefulness | tr 'A-Z' 'a-z').txt"
+      case "$2" in *mWakefulness*) grep mWakefulness "$fixture";; *) cat "$fixture";; esac
+      exit 0;;
+    "input keyevent 223"|"input keyevent 224")
+      stuck=""; for s in $FAKE_ADB_STUCK; do [ "$s" = "$serial" ] && stuck=1; done
+      if [ -n "$state_file" ] && [ -z "$stuck" ]; then
+        if [ "$2" = "input keyevent 223" ]; then echo Asleep > "$state_file"; else echo Awake > "$state_file"; fi
+      fi
+      exit 0;;
+  esac
+fi
 echo "fake ok ${serial}: $*"

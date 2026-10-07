@@ -158,7 +158,7 @@ SyncVR with plain HTTP calls. With `--password`, send HTTP basic auth (any user 
 | `POST /api/library/<file>` | `{"title", "projection", "stereo", "rotation", "loop"}` (any subset; `projection`/`stereo` also accept `"auto"` to drop the stored choice and re-detect) |
 | `POST /api/devices/<id>` | `{"name", "group"}` |
 | `DELETE /api/devices/<id>` | forget an offline headset |
-| `POST /api/command/preview` | same body as a command (`action`, `targets`, optional `dry_run`, default true) → `{"scope_text", "labels", "token", "needs_confirm"}`; nothing is sent to any headset |
+| `POST /api/command/preview` | same body as a command (`action`, `targets`, optional `dry_run`, default true) → `{"scope_text", "labels", "warnings", "every", "token", "needs_confirm"}`; nothing is sent to any headset |
 | `POST /api/features/<key>` | mark a feature as tested → `{"ok": true, "key", "tested": true}`; unknown key is a 400 |
 | `DELETE /api/features/<key>` | mark it untested again |
 | `GET /content/<file>` | the video file (supports Range); `X-Content-SHA256` header once the checksum is known |
@@ -187,6 +187,9 @@ Actions:
 | `sync_content` | `videos` (list or `"all"`), `delete_others` (bool) |
 | `delete_content` | `videos` (list) |
 | `cancel_downloads` | |
+| `sleep`, `wake` | adb jobs; confirm token required (see below). Screen off (`input keyevent 223`) or on (`224`) |
+| `screen_refresh` | adb job; confirm token required. `min_asleep_s` (default 1, max 30). Sends one 223, polls `dumpsys power \| grep mWakefulness` until `Asleep` (3 s timeout), waits `min_asleep_s`, sends 224 and confirms `Awake`. Interrupts playback |
+| `poweroff` | adb job (`reboot -p`); confirm token required; gated by feature `power.poweroff`; `dry_run` defaults to true. A real (`dry_run: false`) power off of every headset (target `all`/omitted, or a list naming every known headset) is refused unless the command also has `"confirm_every": true` |
 
 Example:
 
@@ -201,7 +204,7 @@ Actions that act through adb (rather than the headset connection) are checked by
 
 - **Preview.** `POST /api/command/preview` resolves the targets and returns `scope_text` (for example
   `Sleep 3 headsets: A, B, C`, or `Sleep EVERY headset (72)` when all known headsets are targeted), the headsets'
-  `labels`, a `token`, and `needs_confirm`. The token is a hash of the action, the sorted adb serials of the targets
+  `labels`, `warnings`, `every`, a `token`, and `needs_confirm`. The token is a hash of the action, the sorted adb serials of the targets
   and `dry_run`, so it changes when the target set, their adb reachability or `dry_run` changes.
 - **Confirmation.** An action with `needs_confirm: true` is refused with a 400 unless the command carries
   `"confirm": <token>` matching a fresh computation. Preview again when it is refused.
@@ -213,4 +216,12 @@ Actions that act through adb (rather than the headset connection) are checked by
 - **Jobs.** adb actions return `{"job": "<id>"}` at once and run in the background. Each headset's outcome is added to
   `events` as one `OK` or `FAILED` line, and `jobs` in `GET /api/state` lists recent jobs:
   `{id, action, state: running|done|failed, total, done, failed, started, results: [{device, ok, message}]}`.
+- **Power actions.** `sleep`, `wake`, `screen_refresh` and `poweroff` run per headset by adb serial (`ip:5555`, else
+  USB serial). A headset adb cannot reach is reported as `FAILED (unreachable ...)` and nothing is sent to it. The
+  preview adds `warnings` (list of strings: dry run notice, headsets not reachable by adb, and for `screen_refresh`
+  a note that playback is interrupted on headsets that are playing) and `every` (true when the target set is every
+  known headset).
+- **Intentionally asleep.** `sleep` records its targets in an in-memory set (removed again if the sleep fails);
+  `wake` and `screen_refresh` clear them. `GET /api/state` exposes it as `asleep` (headset ids) so watchdogs can
+  skip those headsets. It is not persisted.
 - Saved headsets now also keep their last `ip` (used to reach them with `adb -s <ip>:5555`).

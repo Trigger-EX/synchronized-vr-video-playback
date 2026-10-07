@@ -3,6 +3,8 @@
 Widgets never touch the controller: they receive snapshot dicts through ``state`` and call bridge methods.
 """
 
+import threading
+
 from PySide6.QtCore import QObject, QTimer, Signal
 
 DIRTY_POLL_MS = 250
@@ -14,6 +16,7 @@ class Bridge(QObject):
     result = Signal(str, object)    # action, result dict of a command or admin call
     failed = Signal(str)            # error message
     stopped = Signal()              # the server thread is no longer running
+    previewed = Signal(str, object, object)  # action, controller.preview() result, the request (params + targets)
 
     def __init__(self, thread, parent=None):
         super().__init__(parent)
@@ -84,6 +87,35 @@ class Bridge(QObject):
     def command(self, action: str, targets, **params) -> None:
         """Run a controller action on `targets` ("all" or a list of headset ids)."""
         self._run(action, lambda c: c.execute(action, dict(params, targets=targets)))
+
+    def _with_adb_listing(self, fn, done) -> None:
+        """Call ``fn(controller, adb_devices)`` on the server loop, with `adb devices` fetched off it first."""
+        def work():
+            try:
+                fleet = self._thread.call(lambda c: c.fleet).result(10)
+                listed = fleet.listed()
+                res = self._thread.call(lambda c: fn(c, listed)).result(30)
+            except Exception as exc:
+                if not self._closed:
+                    self.failed.emit(str(exc) or exc.__class__.__name__)
+                return
+            if not self._closed:
+                done(res)
+        threading.Thread(target=work, name="syncvr-gui-adb", daemon=True).start()
+
+    def preview(self, action: str, targets, **params) -> None:
+        """Ask the server what `action` would hit; answered by the `previewed` signal."""
+        request = dict(params, targets=targets)
+        self._with_adb_listing(lambda c, listed: c.preview(dict(request, action=action), listed=listed),
+                               lambda res: self.previewed.emit(action, res, request))
+
+    def confirmed_command(self, action: str, targets, **params) -> None:
+        """Run a confirm-required action (params carry `confirm` from the preview)."""
+        self._with_adb_listing(lambda c, listed: c.execute(action, dict(params, targets=targets), listed=listed),
+                               lambda res: self.result.emit(action, res if isinstance(res, dict) else {}))
+
+    def set_feature_tested(self, key: str, tested: bool) -> None:
+        self._run("set_feature_tested", lambda c: c.set_feature_tested(key, tested))
 
     def update_device(self, device_id: str, changes: dict) -> None:
         self._run("update_device", lambda c: c.update_device(device_id, changes) and None)

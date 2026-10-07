@@ -10,6 +10,7 @@ from PySide6.QtWidgets import (QCheckBox, QMenu, QComboBox, QDialog, QFrame, QHB
 from . import format as fmt
 from .theme import SEVERITY_COLORS, mark, set_property, state_style
 
+POWER_MENU = (("sleep", "Sleep"), ("wake", "Wake"), ("screen_refresh", "Screen refresh"))
 CARD_WIDTH = 270
 SPACING = 8
 
@@ -396,6 +397,11 @@ class HeadsetsTab(QWidget):
         act = menu.addAction("View headset (scrcpy)...")
         act.setEnabled(card.view_button.isEnabled())
         act.triggered.connect(lambda _c=False, i=card.device_id: self._window.view_headset(i))
+        menu.addSeparator()
+        ids = list(self._window.targets) if card.device_id in self._window.targets else [card.device_id]
+        for action, text in POWER_MENU:
+            act = menu.addAction(text + ("" if len(ids) == 1 else " %d selected" % len(ids)))
+            act.triggered.connect(lambda _c=False, a=action, t=ids: self._window.confirmer.request(a, t))
         menu.exec(event.globalPos())
 
     # ---------------------------------------------------------------- edit
