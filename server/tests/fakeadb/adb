@@ -1,0 +1,18 @@
+#!/usr/bin/env bash
+# Fake adb for tests. Appends its argv (one line per call) to $FAKE_ADB_LOG.
+#   FAKE_ADB_DEVICES  file that `adb devices` prints (default: ../fixtures/adb_devices.txt)
+#   FAKE_ADB_FAIL     space-separated serials whose commands exit 1 ("error: device offline")
+#   FAKE_ADB_SLEEP    seconds every non-`devices` command takes (to exercise timeouts)
+here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+[ -n "$FAKE_ADB_LOG" ] && printf '%s\n' "$*" >> "$FAKE_ADB_LOG"
+serial=""
+if [ "$1" = "-s" ]; then serial="$2"; shift 2; fi
+if [ "$1" = "devices" ]; then
+  cat "${FAKE_ADB_DEVICES:-$here/../fixtures/adb_devices.txt}"
+  exit 0
+fi
+[ -n "$FAKE_ADB_SLEEP" ] && sleep "$FAKE_ADB_SLEEP"
+for bad in $FAKE_ADB_FAIL; do
+  if [ "$bad" = "$serial" ]; then echo "error: device offline" >&2; exit 1; fi
+done
+echo "fake ok ${serial}: $*"

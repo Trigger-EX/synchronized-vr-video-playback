@@ -1,0 +1,265 @@
+import asyncio
+import subprocess
+from pathlib import Path
+from types import SimpleNamespace
+
+import pytest
+
+from syncvr import features
+from syncvr.adbtool import Adb
+from syncvr.controller import CommandError, Controller
+from syncvr.fleetops import MAX_WORKERS, AdbFleet, adb_serial, shared_executor
+from syncvr.library import Library
+
+FAKE_ADB = str(Path(__file__).parent / "fakeadb" / "adb")
+
+
+@pytest.fixture
+def adb_log(tmp_path, monkeypatch):
+    log = tmp_path / "adb.log"
+    monkeypatch.setenv("FAKE_ADB_LOG", str(log))
+    return log
+
+
+def lines(log):
+    return log.read_text().splitlines() if log.exists() else []
+
+
+def dev(ip="", serial=""):
+    return SimpleNamespace(ip=ip, serial=serial)
+
+
+# ---------------------------------------------------------------- adb hardening
+
+def test_adb_run_defaults(monkeypatch):
+    seen = {}
+
+    def fake_run(cmd, **kw):
+        seen.update(kw)
+        return SimpleNamespace(stdout="ok", stderr="", returncode=0)
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+    Adb("adb").run("S", "shell", "id")
+    assert seen["stdin"] == subprocess.DEVNULL and seen["errors"] == "replace" and seen["timeout"] == 20
+    Adb("adb").run("S", "push", "a", "b", timeout=None)
+    assert seen["timeout"] is None
+    Adb("adb").run("S", "install", "x", timeout=600)
+    assert seen["timeout"] == 600
+
+
+def test_adb_run_survives_invalid_utf8(tmp_path):
+    script = tmp_path / "adb"
+    script.write_text("#!/usr/bin/env bash\nprintf 'bad \\377\\376 bytes'\n")
+    script.chmod(0o755)
+    assert "bad" in Adb(str(script)).run("S", "shell", "x")
+
+
+def test_adb_run_times_out(monkeypatch):
+    monkeypatch.setenv("FAKE_ADB_SLEEP", "5")
+    with pytest.raises(subprocess.TimeoutExpired):
+        Adb(FAKE_ADB).run("S", "shell", "x", timeout=0.3)
+
+
+# ----------------------------------------------------------------- fleet / serial
+
+def test_fake_adb_logs_and_lists(adb_log):
+    fleet = AdbFleet(Adb(FAKE_ADB))
+    assert fleet.listed() == {"192.168.1.20:5555", "USB123"}  # offline entries are not usable
+    assert lines(adb_log) == ["devices"]
+    fleet.shell("USB123", "echo hi")
+    assert lines(adb_log)[-1] == "-s USB123 shell echo hi"
+
+
+def test_adb_serial_preference():
+    listed = {"192.168.1.20:5555", "USB123"}
+    assert adb_serial(dev("192.168.1.20", "USB123"), listed) == "192.168.1.20:5555"
+    assert adb_serial(dev("10.9.9.9", "USB123"), listed) == "USB123"
+    assert adb_serial(dev("", "USB123"), listed) == "USB123"
+    assert adb_serial(dev("10.9.9.9", "NOPE"), listed) is None
+    assert adb_serial(dev(), listed) is None
+
+
+def test_fleet_listed_empty_when_adb_missing():
+    assert AdbFleet(Adb("/nonexistent/adb")).listed() == set()
+
+
+def test_shared_executor_is_capped_and_shared():
+    assert shared_executor() is shared_executor()
+    assert shared_executor()._max_workers == MAX_WORKERS == 10
+
+
+# -------------------------------------------------------------------- features
+
+def test_feature_helpers():
+    assert features.mark_tested(set(), "power.sleep") == {"power.sleep"}
+    assert features.unmark_tested({"power.sleep"}, "power.sleep") == set()
+    assert features.normalize(["power.sleep", "gone.feature", 5]) == {"power.sleep"}
+    assert features.is_tested({"power.sleep"}, "power.sleep")
+    with pytest.raises(KeyError):
+        features.mark_tested(set(), "nope")
+    assert all(len(v) == 2 for v in features.REGISTRY.values())
+
+
+# ----------------------------------------------- controller: features/preview/jobs
+
+class FleetController(Controller):
+    """Controller with a test-only gated, confirm-required adb action."""
+
+    def __init__(self, *a, **kw):
+        super().__init__(*a, **kw)
+        self.gated_actions["probe"] = "power.sleep"
+        self.confirm_actions.add("probe")
+        self.action_labels["probe"] = "Probe"
+
+    def _act_probe(self, targets, params):
+        items = [(d, s) for d, s in self.reachable(targets, params.get("_listed")) if s]
+        return self.start_job("probe", items, lambda serial: self.fleet.shell(serial, "echo probe"))
+
+
+@pytest.fixture
+def ctl(content_dir, adb_log):
+    lib = Library(content_dir)
+    lib.scan()
+    c = FleetController(lib, fleet=AdbFleet(Adb(FAKE_ADB)))
+    for i, (ip, serial) in enumerate([("192.168.1.20", "S1"), ("", "USB123"), ("10.9.9.9", "S3")]):
+        d = c.headset_connected({"device_id": f"hs{i}", "serial": serial, "model": "Go"}, SimpleNamespace(
+            remote_ip=ip, http_port=8080, send=lambda m: None, close=lambda: None))
+        d.name = f"Go {i}"
+    return c
+
+
+def test_saved_includes_ip_and_tested_features_roundtrip(ctl, content_dir):
+    assert ctl.devices["hs0"].saved()["ip"] == "192.168.1.20"
+    ctl.set_feature_tested("power.sleep", True)
+    data = ctl.dump()
+    assert data["tested_features"] == ["power.sleep"]
+    data["tested_features"].append("removed.feature")
+    lib = Library(content_dir)
+    lib.scan()
+    c2 = Controller(lib)
+    c2.load(data)
+    assert c2.tested_features == {"power.sleep"}
+    assert c2.devices["hs0"].ip == "192.168.1.20"
+    snap = c2.snapshot()
+    assert {f["key"]: f["tested"] for f in snap["features"]}["power.sleep"] is True
+    assert snap["jobs"] == []
+
+
+def test_set_feature_tested_rejects_unknown(ctl):
+    with pytest.raises(CommandError):
+        ctl.set_feature_tested("nope", True)
+    ctl.set_feature_tested("power.sleep", True)
+    ctl.set_feature_tested("power.sleep", False)
+    assert ctl.tested_features == set() and ctl.dirty
+
+
+def test_preview_scope_and_token(ctl):
+    p = ctl.preview({"action": "probe", "targets": ["hs0", "hs1"]})
+    assert p["scope_text"] == "Probe 2 headsets: Go 0, Go 1"
+    assert p["labels"] == ["Go 0", "Go 1"] and p["needs_confirm"] is True
+    every = ctl.preview({"action": "probe", "targets": "all"})
+    assert every["scope_text"] == "Probe EVERY headset (3)"
+    assert ctl.preview({"action": "probe", "targets": ["hs1", "hs0"]})["token"] == p["token"]
+    assert ctl.preview({"action": "probe", "targets": ["hs0", "hs1"], "dry_run": False})["token"] != p["token"]
+    assert every["token"] != p["token"]
+    with pytest.raises(CommandError):
+        ctl.preview({"action": "nope"})
+    assert ctl.preview({"action": "identify", "targets": ["hs0"]})["needs_confirm"] is False
+
+
+def test_gate_refuses_untested_unless_testing(ctl):
+    token = ctl.preview({"action": "probe", "targets": ["hs0"]})["token"]
+    with pytest.raises(CommandError, match="not marked as tested"):
+        ctl.execute("probe", {"targets": ["hs0"], "confirm": token})
+    ctl.set_feature_tested("power.sleep", True)
+    assert "job" in ctl_run(ctl, {"targets": ["hs0"], "confirm": token})
+
+
+def ctl_run(ctl, params):
+    async def go():
+        result = ctl.execute("probe", params)
+        for _ in range(100):
+            await asyncio.sleep(0.02)
+            if all(j["state"] != "running" for j in ctl.jobs.values()):
+                break
+        return result
+    return asyncio.run(go())
+
+
+def test_testing_flag_bypasses_gate(ctl):
+    token = ctl.preview({"action": "probe", "targets": ["hs0"]})["token"]
+    assert "job" in ctl_run(ctl, {"targets": ["hs0"], "confirm": token, "testing": True})
+
+
+def test_token_mismatch_and_missing_refused(ctl):
+    ctl.set_feature_tested("power.sleep", True)
+    token = ctl.preview({"action": "probe", "targets": ["hs0"]})["token"]
+    with pytest.raises(CommandError, match="confirmation"):
+        ctl.execute("probe", {"targets": ["hs0"]})
+    with pytest.raises(CommandError, match="confirmation"):
+        ctl.execute("probe", {"targets": ["hs0", "hs1"], "confirm": token})  # scope changed
+    with pytest.raises(CommandError, match="confirmation"):
+        ctl.execute("probe", {"targets": ["hs0"], "confirm": token, "dry_run": False})
+
+
+def test_token_changes_when_adb_serials_change(ctl):
+    a = ctl.preview({"action": "probe", "targets": ["hs0"]}, listed={"192.168.1.20:5555"})["token"]
+    b = ctl.preview({"action": "probe", "targets": ["hs0"]}, listed={"S1"})["token"]
+    assert a != b
+
+
+def test_job_results_marshalled_to_loop_thread(ctl, adb_log, monkeypatch):
+    monkeypatch.setenv("FAKE_ADB_FAIL", "USB123")
+    ctl.set_feature_tested("power.sleep", True)
+    token = ctl.preview({"action": "probe", "targets": ["hs0", "hs1", "hs2"]})["token"]
+    threads = []
+    orig = ctl.log_event
+    import threading
+    ctl.log_event = lambda *a, **k: (threads.append(threading.get_ident()), orig(*a, **k))
+
+    async def go():
+        main = threading.get_ident()
+        result = ctl.execute("probe", {"targets": ["hs0", "hs1", "hs2"], "confirm": token})
+        assert set(result) >= {"job"} and ctl.jobs[result["job"]]["state"] == "running"
+        for _ in range(200):
+            await asyncio.sleep(0.02)
+            if ctl.jobs[result["job"]]["state"] != "running":
+                break
+        return main, result["job"]
+
+    main, job_id = asyncio.run(go())
+    assert threads and set(threads) == {main}
+    job = ctl.snapshot()["jobs"][0]
+    assert job["id"] == job_id and job["total"] == 2 and job["done"] == 2 and job["failed"] == 1
+    msgs = [e["message"] for e in ctl.events]
+    assert any(m.startswith("probe: Go 0 OK") for m in msgs)
+    assert any(m.startswith("probe: Go 1 FAILED") for m in msgs)
+    assert sum("-s " in line and "echo probe" in line for line in lines(adb_log)) == 2
+
+
+def test_start_job_without_loop_is_an_error(ctl):
+    with pytest.raises(CommandError):
+        ctl.start_job("x", [], lambda s: "")
+
+
+def test_web_preview_and_feature_routes(ctl):
+    from aiohttp.test_utils import TestClient, TestServer
+    from syncvr.web import WebApp
+
+    async def go():
+        async with TestClient(TestServer(WebApp(ctl).app)) as client:
+            r = await client.post("/api/command/preview", json={"action": "probe", "targets": ["hs0"]})
+            preview = await r.json()
+            assert r.status == 200 and preview["needs_confirm"] and preview["token"]
+            assert (await client.post("/api/command/preview", json={"action": "nope"})).status == 400
+            r = await client.post("/api/command", json={"action": "probe", "targets": ["hs0"]})
+            assert r.status == 400 and "not marked as tested" in (await r.json())["error"]
+            assert (await client.post("/api/features/power.sleep")).status == 200
+            assert "power.sleep" in ctl.tested_features
+            r = await client.post("/api/command", json={"action": "probe", "targets": ["hs0"],
+                                                         "confirm": preview["token"]})
+            assert r.status == 200 and "job" in (await r.json())["result"]
+            assert (await client.delete("/api/features/power.sleep")).status == 200
+            assert "power.sleep" not in ctl.tested_features
+            assert (await client.post("/api/features/bogus")).status == 400
+    asyncio.run(go())

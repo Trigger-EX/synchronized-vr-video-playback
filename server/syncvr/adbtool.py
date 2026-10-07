@@ -30,6 +30,9 @@ VRSHELL = "com.oculus.vrshell"  # the Oculus home environment that kiosk mode re
 # change; rebooting sooner boots the previous state. Kiosk commands wait this long after `sync`.
 PERSIST_WAIT_S = 15
 sleep = time.sleep  # monkeypatch in tests
+DEFAULT_TIMEOUT_S = 20  # per adb call; pass timeout=None for long transfers, or a larger number
+WAIT_FOR_DEVICE_S = 60  # `adb wait-for-device` after root/unroot restarts adbd
+_DEFAULT = object()
 
 
 class Adb:
@@ -45,9 +48,17 @@ class Adb:
     def videos_dir(self) -> str:
         return f"{self.files_dir}/videos"
 
-    def run(self, serial, *args, timeout=None, check=True) -> str:
+    def run(self, serial, *args, timeout=_DEFAULT, check=True) -> str:
+        """Run one adb command; raises RuntimeError on failure when ``check``.
+
+        Never reads the terminal (stdin is closed), tolerates non-UTF-8 output, and gives up after
+        DEFAULT_TIMEOUT_S (``timeout=None`` waits forever, for pushes and installs).
+        """
+        if timeout is _DEFAULT:
+            timeout = DEFAULT_TIMEOUT_S
         cmd = [self.adb] + (["-s", serial] if serial else []) + list(args)
-        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
+        proc = subprocess.run(cmd, capture_output=True, text=True, errors="replace", timeout=timeout,
+                              stdin=subprocess.DEVNULL)
         out = (proc.stdout + proc.stderr).strip()
         if check and proc.returncode != 0:
             raise RuntimeError(out or f"adb exited with {proc.returncode}")
@@ -246,12 +257,12 @@ def run(args) -> int:
             if not already_root:
                 try:
                     adb.run(s, "root", check=False)
-                    adb.run(s, "wait-for-device", check=False)
+                    adb.run(s, "wait-for-device", check=False, timeout=WAIT_FOR_DEVICE_S)
                     if try_enable(s):
                         return
                 finally:
                     adb.run(s, "unroot", check=False)
-                    adb.run(s, "wait-for-device", check=False)
+                    adb.run(s, "wait-for-device", check=False, timeout=WAIT_FOR_DEVICE_S)
             raise RuntimeError(
                 f"{VRSHELL} is still disabled (listed by 'pm list packages -d'); recover manually: "
                 f"adb -s {s} root && adb -s {s} shell pm enable {VRSHELL} && "
@@ -265,12 +276,12 @@ def run(args) -> int:
             try:
                 if args.root:
                     adb.run(s, "root")
-                    adb.run(s, "wait-for-device")
+                    adb.run(s, "wait-for-device", timeout=WAIT_FOR_DEVICE_S)
                     outs = [adb.shell(s, f"pm disable {VRSHELL}", check=False)]
                     outs.append(broadcast(s, True))
                     set_home(s, alias)
                     adb.run(s, "unroot")
-                    adb.run(s, "wait-for-device")
+                    adb.run(s, "wait-for-device", timeout=WAIT_FOR_DEVICE_S)
                     set_home(s, alias)
                 else:
                     outs = [adb.shell(s, f"pm disable-user --user 0 {VRSHELL}", check=False)]
@@ -294,7 +305,7 @@ def run(args) -> int:
         def kiosk_off(s, restore):
             if restore and args.root:
                 adb.run(s, "root")
-                adb.run(s, "wait-for-device")
+                adb.run(s, "wait-for-device", timeout=WAIT_FOR_DEVICE_S)
             try:
                 if restore:
                     adb.shell(s, f"pm unhide {VRSHELL}", check=False)
@@ -309,7 +320,7 @@ def run(args) -> int:
             finally:
                 if restore and args.root:
                     adb.run(s, "unroot", check=False)
-                    adb.run(s, "wait-for-device", check=False)
+                    adb.run(s, "wait-for-device", check=False, timeout=WAIT_FOR_DEVICE_S)
 
         def kiosk(s):
             if args.state == "on":

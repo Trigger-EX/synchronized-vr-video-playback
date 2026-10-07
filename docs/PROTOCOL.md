@@ -158,6 +158,9 @@ SyncVR with plain HTTP calls. With `--password`, send HTTP basic auth (any user 
 | `POST /api/library/<file>` | `{"title", "projection", "stereo", "rotation", "loop"}` (any subset; `projection`/`stereo` also accept `"auto"` to drop the stored choice and re-detect) |
 | `POST /api/devices/<id>` | `{"name", "group"}` |
 | `DELETE /api/devices/<id>` | forget an offline headset |
+| `POST /api/command/preview` | same body as a command (`action`, `targets`, optional `dry_run`, default true) → `{"scope_text", "labels", "token", "needs_confirm"}`; nothing is sent to any headset |
+| `POST /api/features/<key>` | mark a feature as tested → `{"ok": true, "key", "tested": true}`; unknown key is a 400 |
+| `DELETE /api/features/<key>` | mark it untested again |
 | `GET /content/<file>` | the video file (supports Range); `X-Content-SHA256` header once the checksum is known |
 
 `targets`: `"all"` (default), `"online"`, a list of headset ids, or `{"group": "Room A"}`. A target list that
@@ -191,3 +194,23 @@ Example:
 curl -X POST http://server:8080/api/command -H 'Content-Type: application/json' \
      -d '{"action":"play","video":"concert_360_TB.mp4","targets":{"group":"Room A"}}'
 ```
+
+### Preview, confirmation and feature gating
+
+Actions that act through adb (rather than the headset connection) are checked by the server:
+
+- **Preview.** `POST /api/command/preview` resolves the targets and returns `scope_text` (for example
+  `Sleep 3 headsets: A, B, C`, or `Sleep EVERY headset (72)` when all known headsets are targeted), the headsets'
+  `labels`, a `token`, and `needs_confirm`. The token is a hash of the action, the sorted adb serials of the targets
+  and `dry_run`, so it changes when the target set, their adb reachability or `dry_run` changes.
+- **Confirmation.** An action with `needs_confirm: true` is refused with a 400 unless the command carries
+  `"confirm": <token>` matching a fresh computation. Preview again when it is refused.
+- **Dry run.** Destructive actions take `dry_run` (default `true`): they resolve the targets and log what they
+  would do without sending anything. Send `"dry_run": false` to act.
+- **Feature gating.** Each gated action belongs to a feature (`features` in `GET /api/state`: `key`, `category`,
+  `label`, `tested`). The server refuses a gated action unless its feature is marked tested or the command has
+  `"testing": true`. Marked features persist in `state.json` as `tested_features`.
+- **Jobs.** adb actions return `{"job": "<id>"}` at once and run in the background. Each headset's outcome is added to
+  `events` as one `OK` or `FAILED` line, and `jobs` in `GET /api/state` lists recent jobs:
+  `{id, action, state: running|done|failed, total, done, failed, started, results: [{device, ok, message}]}`.
+- Saved headsets now also keep their last `ip` (used to reach them with `adb -s <ip>:5555`).

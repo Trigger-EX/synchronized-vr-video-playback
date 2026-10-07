@@ -1,6 +1,7 @@
 """HTTP side: JSON API for the Android operator app and show-control systems, and content downloads."""
 
 import base64
+import asyncio
 import binascii
 import hmac
 import logging
@@ -44,6 +45,9 @@ class WebApp:
         r.add_get("/", self.index)
         r.add_get("/api/state", self.get_state)
         r.add_post("/api/command", self.post_command)
+        r.add_post("/api/command/preview", self.post_preview)
+        r.add_post("/api/features/{key}", self.post_feature)
+        r.add_delete("/api/features/{key}", self.delete_feature)
         r.add_get("/api/settings", self.get_settings)
         r.add_post("/api/settings", self.post_settings)
         r.add_post("/api/library/rescan", self.post_rescan)
@@ -67,13 +71,42 @@ class WebApp:
             raise CommandError("request body must be a JSON object")
         return body
 
+    async def _adb_listing(self):
+        """`adb devices` on the executor, so no adb process blocks the event loop."""
+        fleet = self.controller.fleet
+        return await asyncio.get_running_loop().run_in_executor(fleet.executor, fleet.listed)
+
     async def post_command(self, request):
         try:
             body = await self._body(request)
-            result = self.controller.execute(body.get("action", ""), body)
+            action = body.get("action", "")
+            listed = await self._adb_listing() if action in self.controller.confirm_actions else None
+            result = self.controller.execute(action, body, listed=listed)
         except (CommandError, ValueError, TypeError, KeyError) as exc:
             return _json_error(400, str(exc))
         return web.json_response({"ok": True, "result": result})
+
+    async def post_preview(self, request):
+        try:
+            body = await self._body(request)
+            result = self.controller.preview(body, listed=await self._adb_listing())
+        except (CommandError, ValueError, TypeError, KeyError) as exc:
+            return _json_error(400, str(exc))
+        return web.json_response(result)
+
+    async def post_feature(self, request):
+        try:
+            self.controller.set_feature_tested(request.match_info["key"], True)
+        except CommandError as exc:
+            return _json_error(400, str(exc))
+        return web.json_response({"ok": True, "key": request.match_info["key"], "tested": True})
+
+    async def delete_feature(self, request):
+        try:
+            self.controller.set_feature_tested(request.match_info["key"], False)
+        except CommandError as exc:
+            return _json_error(400, str(exc))
+        return web.json_response({"ok": True, "key": request.match_info["key"], "tested": False})
 
     async def get_settings(self, request):
         return web.json_response(self.controller.settings)

@@ -10,6 +10,8 @@ should be at any moment.
 """
 
 import asyncio
+import hashlib
+import json
 import logging
 import statistics
 import time
@@ -18,7 +20,8 @@ from collections import Counter, OrderedDict, defaultdict, deque
 from dataclasses import dataclass, field
 from typing import Any, Callable, Dict, Iterable, List, Optional
 
-from . import __version__
+from . import __version__, features
+from .fleetops import AdbFleet
 from .library import Library, Video
 from .protocol import DEFAULT_SYNC_SETTINGS, server_clock, validate_settings
 
@@ -41,6 +44,8 @@ RECOVERY_GROUP_S = 0.25
 ANCHOR_EQUAL_S = 1e-3
 ANCHOR_SANITY_S = 2.0
 PLAYBACK_ACTIONS = ("load", "play", "pause", "seek", "stop")
+MAX_JOBS_KEPT = 20
+PREVIEW_NAMES_SHOWN = 8
 
 
 class CommandError(Exception):
@@ -73,7 +78,7 @@ class Device:
 
     def saved(self) -> dict:
         return {"name": self.name, "group": self.group, "volume": self.volume, "serial": self.serial,
-                "model": self.model, "last_seen": self.last_seen, "desired": self.desired}
+                "ip": self.ip, "model": self.model, "last_seen": self.last_seen, "desired": self.desired}
 
     def to_json(self) -> dict:
         return {
@@ -233,8 +238,18 @@ class Distributor:
 
 
 class Controller:
-    def __init__(self, library: Library, server_name: str = "SyncVR", max_downloads: int = 4):
+    def __init__(self, library: Library, server_name: str = "SyncVR", max_downloads: int = 4,
+                 fleet: Optional[AdbFleet] = None):
         self.library = library
+        self.fleet = fleet or AdbFleet()
+        self.tested_features: set = set()
+        # adb actions (see start_job): action -> feature that must be tested, and the actions that need
+        # a confirmation token from preview(). Filled in by the action implementations.
+        self.gated_actions: Dict[str, str] = {}
+        self.confirm_actions: set = set()
+        self.action_labels: Dict[str, str] = {}
+        self.loop: Optional[asyncio.AbstractEventLoop] = None  # where job results are marshalled to
+        self.jobs: "OrderedDict[str, dict]" = OrderedDict()
         self.server_name = server_name
         self.settings = dict(DEFAULT_SYNC_SETTINGS)
         self.devices: Dict[str, Device] = {}
@@ -266,7 +281,7 @@ class Controller:
             fresh = False
         for device_id, saved in data.get("devices", {}).items():
             dev = Device(device_id=device_id)
-            for key in ("name", "group", "serial", "model"):
+            for key in ("name", "group", "serial", "model", "ip"):
                 setattr(dev, key, str(saved.get(key, "")))
             dev.volume = float(saved.get("volume", 1.0))
             dev.last_seen = float(saved.get("last_seen", 0.0))
@@ -274,6 +289,8 @@ class Controller:
                 dev.desired = dict(saved["desired"])
             self.devices[device_id] = dev
         self.library.metadata.update(data.get("videos", {}))
+        saved_features = data.get("tested_features", [])
+        self.tested_features = features.normalize(saved_features if isinstance(saved_features, list) else [])
         if "max_downloads" in data:
             self.distributor.max_concurrent = max(0, int(data["max_downloads"]))
         for device_id, job in data.get("downloads", {}).items():
@@ -297,6 +314,7 @@ class Controller:
             "devices": {d.device_id: d.saved() for d in self.devices.values()},
             "videos": self.library.metadata,
             "downloads": self.distributor.pending_json(),
+            "tested_features": sorted(self.tested_features),
         }
 
     def add_listener(self, fn: Callable[[], None]) -> None:
@@ -326,7 +344,123 @@ class Controller:
             "library": self.library.to_json(),
             "downloads": self.distributor.to_json(),
             "events": list(self.events)[-150:],
+            "features": features.describe(self.tested_features),
+            "jobs": [dict(j, results=list(j["results"])) for j in self.jobs.values()],
         }
+
+    # ------------------------------------------------------------------- jobs
+
+    def start_job(self, action: str, items: List[tuple], fn: Callable[[str], Any]) -> dict:
+        """Run ``fn(adb_serial)`` for each ``(device, serial)`` on the shared executor.
+
+        Returns ``{"job": id}`` at once. Each result is marshalled back to the event loop thread with
+        call_soon_threadsafe, where it becomes one OK/FAILED log line; workers never touch controller state.
+        """
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            loop = self.loop
+        if loop is None:
+            raise CommandError("the server is not running")
+        self.loop = loop
+        job_id = uuid.uuid4().hex[:8]
+        self.jobs[job_id] = {"id": job_id, "action": action, "state": "running", "total": len(items),
+                             "done": 0, "failed": 0, "started": time.time(), "results": []}
+        while len(self.jobs) > MAX_JOBS_KEPT:
+            self.jobs.popitem(last=False)
+
+        def work(dev_id: str, serial: str) -> None:
+            try:
+                ok, message = True, str(fn(serial) or "")
+            except Exception as exc:  # a failing headset must not take the job down
+                ok, message = False, str(exc) or type(exc).__name__
+            try:
+                loop.call_soon_threadsafe(self._job_result, job_id, dev_id, ok, message)
+            except RuntimeError:
+                pass  # loop closed: the server is shutting down
+
+        for dev, serial in items:
+            self.fleet.submit(work, dev.device_id, serial)
+        self.changed()
+        return {"job": job_id}
+
+    def _job_result(self, job_id: str, dev_id: str, ok: bool, message: str) -> None:
+        job = self.jobs.get(job_id)
+        if job is None:
+            return
+        dev = self.devices.get(dev_id)
+        label = dev.label if dev else dev_id
+        job["done"] += 1
+        job["failed"] += not ok
+        job["results"].append({"device": dev_id, "ok": ok, "message": message})
+        if job["done"] >= job["total"]:
+            job["state"] = "failed" if job["failed"] == job["total"] else "done"
+        self.log_event("info" if ok else "error",
+                       f"{job['action']}: {label} {'OK' if ok else 'FAILED'}" + (f" ({message})" if message else ""),
+                       dev)
+
+    def reachable(self, targets: List[Device], listed=None) -> List[tuple]:
+        """``(device, adb serial)`` for each target; the serial is None when adb cannot reach it."""
+        listed = self.fleet.listed() if listed is None else listed
+        return [(d, self.fleet.adb_serial(d, listed)) for d in targets]
+
+    # ----------------------------------------------------- features, preview
+
+    def set_feature_tested(self, key: str, tested: bool) -> None:
+        try:
+            self.tested_features = (features.mark_tested if tested else features.unmark_tested)(
+                self.tested_features, key)
+        except KeyError as exc:
+            raise CommandError(exc.args[0])
+        self.changed(persist=True)
+
+    @staticmethod
+    def _dry_run(params: dict) -> bool:
+        return bool(params.get("dry_run", True))
+
+    def _token(self, action: str, pairs: List[tuple], dry_run: bool) -> str:
+        serials = sorted(serial or f"unreachable:{d.device_id}" for d, serial in pairs)
+        blob = json.dumps([action, serials, dry_run], separators=(",", ":"))
+        return hashlib.sha256(blob.encode()).hexdigest()[:16]
+
+    def preview(self, params: dict, listed=None) -> dict:
+        """What a command would hit, in words, plus the token that confirms it.
+
+        ``listed`` is the set from ``adb devices``; callers on the event loop fetch it on the executor
+        first so no adb process runs here.
+        """
+        action = str(params.get("action", ""))
+        if getattr(self, f"_act_{action}", None) is None:
+            raise CommandError(f"unknown action: {action}")
+        targets = self.resolve_targets(params.get("targets"))
+        if not targets:
+            raise CommandError("no headsets match the selected targets")
+        pairs = self.reachable(targets, listed)
+        labels = [d.label for d in targets]
+        verb = self.action_labels.get(action) or action.replace("_", " ").capitalize()
+        if len(targets) == len(self.devices):
+            scope = f"{verb} EVERY headset ({len(targets)})"
+        else:
+            names = ", ".join(labels[:PREVIEW_NAMES_SHOWN])
+            if len(labels) > PREVIEW_NAMES_SHOWN:
+                names += f" and {len(labels) - PREVIEW_NAMES_SHOWN} more"
+            scope = f"{verb} {len(targets)} headset{'s' if len(targets) != 1 else ''}: {names}"
+        return {"scope_text": scope, "labels": labels,
+                "token": self._token(action, pairs, self._dry_run(params)),
+                "needs_confirm": action in self.confirm_actions}
+
+    def _guard(self, action: str, targets: List[Device], params: dict, listed=None) -> None:
+        """Refuse gated actions that are untested, and confirm-required ones without a matching token."""
+        feature = self.gated_actions.get(action)
+        if feature and feature not in self.tested_features and params.get("testing") is not True:
+            label = features.REGISTRY.get(feature, ("", feature))[1]
+            raise CommandError(f"{label} is not marked as tested; use the Testing section "
+                               f"(or send testing: true) to run it")
+        if action in self.confirm_actions:
+            token = self._token(action, self.reachable(targets, listed), self._dry_run(params))
+            if params.get("confirm") != token:
+                raise CommandError("confirmation missing or out of date (headsets changed since the "
+                                   "preview); request a new preview and confirm again")
 
     # ------------------------------------------------------ headset lifecycle
 
@@ -477,13 +611,14 @@ class Controller:
             devices = [d for d in devices if d.online]
         return devices
 
-    def execute(self, action: str, params: dict) -> dict:
+    def execute(self, action: str, params: dict, listed=None) -> dict:
         handler = getattr(self, f"_act_{action}", None)
         if handler is None:
             raise CommandError(f"unknown action: {action}")
         targets = self.resolve_targets(params.get("targets"))
         if not targets:
             raise CommandError("no headsets match the selected targets")
+        self._guard(action, targets, params, listed)
         if action in PLAYBACK_ACTIONS:
             self._cancel_recovery(targets)
         online = sum(1 for d in targets if d.online)
