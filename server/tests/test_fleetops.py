@@ -460,3 +460,52 @@ def test_resolve_serials_refuses_shared_addresses_and_prefers_own_serial():
     serials, notes = resolve_serials([d("a", "10.0.0.1", ""), d("b", "10.0.0.1", "")], listed)
     assert serials == {"a": None, "b": None} and len(notes) == 2
     assert resolve_serials([d("a", "10.0.0.1", "")], set()) == ({"a": None}, {})
+
+
+# ------------------------------------------------------- P7: disconnect, scan
+
+def test_scan_candidates_limits():
+    from syncvr.fleetops import scan_candidates
+    hosts = scan_candidates("192.168.1.0/27")
+    assert len(hosts) == 30 and hosts[0] == "192.168.1.1" and hosts[-1] == "192.168.1.30"
+    assert scan_candidates("192.168.1.77/32") == ["192.168.1.77"]
+    assert scan_candidates("192.168.1.5/27")[0] == "192.168.1.1"  # strict=False
+    for bad, text in (("192.168.1.0/26", "limit"), ("8.8.8.0/28", "private"), ("nonsense", "valid"),
+                      ("10.0.0.0/8", "limit"), ("fd00::/126", "IPv4")):
+        with pytest.raises(ValueError, match=text):
+            scan_candidates(bad)
+
+
+def test_reconnect_argv_order_and_dry_run(adb_log, monkeypatch):
+    fleet = AdbFleet(Adb(FAKE_ADB))
+    pauses = []
+    monkeypatch.setattr(AdbFleet, "sleeper", staticmethod(pauses.append))
+    assert "dry run" in fleet.reconnect("10.0.0.5:5555", dry_run=True)
+    assert lines(adb_log) == []
+    fleet.reconnect("10.0.0.5:5555", dry_run=False)
+    assert lines(adb_log) == ["disconnect 10.0.0.5:5555", "connect 10.0.0.5:5555"]
+    assert pauses == [0.5]
+
+
+def test_disconnect_failure_raises_and_stops_reconnect(adb_log, monkeypatch):
+    monkeypatch.setenv("FAKE_ADB_DISCONNECT_FAIL", "10.0.0.5:5555")
+    fleet = AdbFleet(Adb(FAKE_ADB))
+    with pytest.raises(RuntimeError, match="no such device"):
+        fleet.disconnect("10.0.0.5:5555")
+    with pytest.raises(RuntimeError):
+        fleet.reconnect("10.0.0.5:5555", dry_run=False)
+    assert "connect 10.0.0.5:5555" not in lines(adb_log)
+
+
+def test_probe_open_and_closed_port():
+    import socket
+    srv = socket.socket()
+    srv.bind(("127.0.0.1", 0))
+    srv.listen(1)
+    port = srv.getsockname()[1]
+    fleet = AdbFleet(Adb(FAKE_ADB))
+    try:
+        assert fleet.probe("127.0.0.1", port, timeout=1.0) is True
+    finally:
+        srv.close()
+    assert fleet.probe("127.0.0.1", port, timeout=0.2) is False

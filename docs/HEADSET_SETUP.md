@@ -253,3 +253,16 @@ The panel's **View** menu opens scrcpy mirrors (needs adb and scrcpy, and `adb t
 * **Close all captures** closes every window the panel opened this way (not the docked single view).
 
 Batch windows use the window class `SyncVR-batch`. If scrcpy is too old for `--window-x`, windows open untiled.
+
+## Network tools (Tools tab, NETWORK card)
+
+* **Connect all** runs `adb connect <ip>:5555` for every saved headset address (needs `adb tcpip 5555` once per headset).
+* **Purge...** drops those connections and reconnects them. It starts as a dry run; untick it to act. It is refused
+  while a push is running or another adb job is active.
+* **Scan subnet...** probes a small private subnet (at most 32 hosts, e.g. `192.168.1.0/27`) for port 5555 and
+  connects headsets the server already knows. Other devices that answer are logged and left alone.
+* **Bandwidth test** makes each selected, idle headset download up to 20 MB of the largest video and reports Mbps
+  (the real HTTP path, so it includes the access point). It is refused in Show Mode, while content is syncing, and
+  for headsets that are playing. Headsets running an older app time out with "player may not support bandwidth_test".
+
+Purge and Bandwidth test stay disabled until marked tested in the Testing card.

@@ -3,6 +3,7 @@ package com.syncvr.player.core.content
 import com.syncvr.player.core.sync.JsonWriter
 import com.syncvr.player.core.sync.ServerMessage
 import java.util.concurrent.ConcurrentLinkedQueue
+import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicInteger
 
 /**
@@ -19,6 +20,7 @@ class ContentManager(
     private val inUse: () -> String? = { null },
     private val onWarning: (String) -> Unit = {},
     private val sleep: ((Long, () -> Boolean) -> Unit)? = null,
+    private val probe: BandwidthProbe = BandwidthProbe(),
 ) {
     val outbox = ConcurrentLinkedQueue<String>()
 
@@ -27,6 +29,7 @@ class ContentManager(
     private var worker: Thread? = null
     private var current: Triple<String, Long, Long>? = null
     private var currentJob: String? = null
+    private val probing = AtomicBoolean(false)
 
     val busy: Boolean get() = synchronized(lock) { worker?.isAlive == true }
 
@@ -61,9 +64,38 @@ class ContentManager(
                 for (name in store.delete(m.names, inUse())) onWarning("not deleting $name: it is loaded")
                 outbox.add(inventoryJson())
             }
+            "bandwidth_test" -> startBandwidthTest(m)
             else -> return false
         }
         return true
+    }
+
+    /** One speed test at a time, never while downloading; a refused test is answered with an error result. */
+    private fun startBandwidthTest(m: ServerMessage) {
+        val url = m.url
+        val refusal = when {
+            url.isNullOrEmpty() -> "no url"
+            busy -> "busy downloading"
+            !probing.compareAndSet(false, true) -> "a bandwidth test is already running"
+            else -> null
+        }
+        if (refusal != null) {
+            outbox.add(BandwidthResult(false, 0, 0.0, 0.0, refusal).toJson(m.job))
+            return
+        }
+        val want = (if (m.bytes <= 0) DEFAULT_TEST_BYTES else m.bytes).coerceIn(MIN_TEST_BYTES, MAX_TEST_BYTES)
+        val seconds = (if (m.seconds <= 0.0) DEFAULT_TEST_SECONDS else m.seconds).coerceIn(MIN_TEST_SECONDS, MAX_TEST_SECONDS)
+        val t = Thread({
+            try {
+                outbox.add(probe.run(url!!, want, seconds).toJson(m.job))
+            } catch (e: Exception) {
+                outbox.add(BandwidthResult(false, 0, 0.0, 0.0, e.message ?: "test failed").toJson(m.job))
+            } finally {
+                probing.set(false)
+            }
+        }, "SyncVR bandwidth")
+        t.isDaemon = true
+        t.start()
     }
 
     private fun startSync(m: ServerMessage) {
@@ -141,6 +173,12 @@ class ContentManager(
 
     private companion object {
         const val RESERVE_BYTES = 200L * 1024 * 1024
+        const val MIN_TEST_BYTES = 1L * 1024 * 1024
+        const val DEFAULT_TEST_BYTES = 20L * 1024 * 1024
+        const val MAX_TEST_BYTES = 200L * 1024 * 1024
+        const val MIN_TEST_SECONDS = 5.0
+        const val DEFAULT_TEST_SECONDS = 30.0
+        const val MAX_TEST_SECONDS = 120.0
         val RETRY_DELAYS_MS = longArrayOf(5_000, 15_000, 30_000)
     }
 }

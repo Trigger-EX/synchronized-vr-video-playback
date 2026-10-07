@@ -404,6 +404,8 @@ class SimHeadset:
         elif kind == "cancel_downloads":
             if self.download_task:
                 self.download_task.cancel()
+        elif kind == "bandwidth_test":
+            asyncio.create_task(self._bandwidth_test(msg))
         elif kind == "delete_content":
             for name in msg.get("names", []):
                 if is_safe_filename(name):
@@ -452,6 +454,30 @@ class SimHeadset:
         if job is not None:
             done["job"] = job
         self.send(done)
+
+    async def _bandwidth_test(self, msg: dict) -> None:
+        """Read ``bytes`` of the URL, discard them and report the rate (like the real player's test)."""
+        import aiohttp
+
+        want, seconds = int(msg.get("bytes") or 0), float(msg.get("seconds") or 30)
+        got, error = 0, ""
+        start = time.monotonic()
+        try:
+            async with aiohttp.ClientSession() as session:
+                async with session.get(msg["url"], timeout=aiohttp_timeout()) as resp:
+                    if resp.status not in (200, 206):
+                        raise ValueError(f"HTTP {resp.status}")
+                    async for chunk in resp.content.iter_chunked(64 * 1024):
+                        got += len(chunk)
+                        if got >= want or time.monotonic() - start >= seconds:
+                            break
+        except (aiohttp.ClientError, OSError, ValueError, KeyError, asyncio.TimeoutError) as exc:
+            error = str(exc) or type(exc).__name__
+        elapsed = max(time.monotonic() - start, 1e-6)
+        ok = got > 0 and not error
+        self.send({"type": "bandwidth_result", "job": msg.get("job"), "ok": ok, "bytes": got,
+                   "seconds": round(elapsed, 3), "mbps": round(got * 8 / elapsed / 1e6, 2) if ok else 0.0,
+                   "error": "" if ok else (error or "no data received")})
 
     async def _verify(self, path: Path, expected: str) -> bool:
         """Check a finished file against the server's SHA-256; a bad file is deleted."""

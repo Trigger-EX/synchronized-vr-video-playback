@@ -214,3 +214,50 @@ def test_open_folder_uses_snapshots_dir_under_data_dir(win, tmp_path):
     win._config.data_dir = tmp_path / "data"
     tab.open_snapshots_folder()
     assert opened == [str(tmp_path / "data" / "snapshots")] and (tmp_path / "data" / "snapshots").is_dir()
+
+
+# ---------------------------------------------------------------- network card (P7)
+
+def test_network_card_buttons_and_empty_cidr(win):
+    tab = feed(win)
+    assert tab.scan_input.text() == ""
+    tab.connect_button.click()
+    assert win.bridge.calls[-1] == ("connect", "all", {})
+    tab.scan_button.click()  # empty subnet: nothing is sent
+    assert not any(c[0] == "scan" for c in win.bridge.calls)
+    assert "Enter a subnet" in win.statusBar().currentMessage()
+    tab.scan_input.setText(" 192.168.1.0/27 ")
+    tab.scan_button.click()
+    assert win.bridge.calls[-1] == ("scan", "192.168.1.0/27")
+
+
+def test_purge_and_bandwidth_gated_and_listed_in_testing_card(win):
+    tab = feed(win)
+    assert not tab.purge_button.isEnabled() and not tab.bandwidth_button.isEnabled()
+    assert "adb.purge" in tab.testing_buttons and "debug.bandwidth" in tab.testing_buttons
+    tab.run_purge(testing=True)
+    assert win.bridge.calls[-1] == ("preview", "purge", "all", {"testing": True})
+    tab = feed(win, tested={"adb.purge", "debug.bandwidth"})
+    assert tab.purge_button.isEnabled() and tab.bandwidth_button.isEnabled()
+    assert "adb.purge" not in tab.testing_buttons
+    tab.bandwidth_button.click()
+    assert win.bridge.calls[-1] == ("preview", "bandwidth_test", "all", {})
+
+
+@pytest.mark.parametrize("ticked, key, dry", [(True, "tok-dry", True), (False, "tok-live", False)])
+def test_purge_dialog_tick_picks_the_matching_token(win, ticked, key, dry):
+    feed(win, tested={"adb.purge"})
+    shown = answer(win, True)
+    p = preview("Purge 1 headset: Go A", token="tok-dry", dry_run_choice=True,
+                tokens={"dry_run": "tok-dry", "live": "tok-live"},
+                warnings=["Dry run: nothing will be sent to the headsets."])
+    orig = win.confirmer._exec
+
+    def tick(dialog):
+        assert dialog.dry_run_check.isVisibleTo(dialog) and dialog.dry_run_check.isChecked()
+        assert dialog.warning_label.isHidden()  # the tick replaces the dry-run warning
+        dialog.dry_run_check.setChecked(ticked)
+        return orig(dialog)
+    win.confirmer._exec = tick
+    win.bridge.previewed.emit("purge", p, {"targets": ["a"]})
+    assert shown and win.bridge.calls[-1] == ("confirmed", "purge", ["a"], {"dry_run": dry, "confirm": key})

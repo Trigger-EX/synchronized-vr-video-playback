@@ -62,6 +62,16 @@ Tests: `decide()` table tests on fixtures, fake clock, brake suppresses send whi
 1. Auto-enable Show Mode while any headset is playing?
 2. May any watchdog (e.g. black-screen probe) act while Show Mode is on?
 3. Should keepalive's `adb connect` be blocked by brakes?
-4. Bandwidth test: player-side (Kotlin change) or adb push?
+4. ~~Bandwidth test: player-side (Kotlin change) or adb push?~~ Resolved: player-side (`bandwidth_test` message; matches the real HTTP content path).
 5. Should adb-only headsets (never ran the player) appear in the GUI?
 6. Which features already count as tested on real headsets?
+
+## P7 detailed plan
+- *fleetops:* `disconnect(addr)` (fails unless output says "disconnected"), `reconnect(addr, dry_run)` (disconnect, 0.5 s, connect), `probe(ip, port, timeout)`, pure `scan_candidates(cidr)` (private addresses only; more than 32 hosts is refused, never truncated).
+- *features:* `adb.purge`, `debug.bandwidth` (gated until tested).
+- *controller:* `start_job` takes address-keyed items. `connect`: persisted `ip:5555`, de-duplicated ("same address as X", "no saved address"). `purge`: gated, confirm token over saved addresses (`token_pairs`), dry run default, refused (unless dry run) while the CLI push lock or any adb job runs; Show Mode only warns; per-address disconnect, never a bare `adb disconnect`. `scan(cidr)`: probe on the executor, connect open ports of known headsets as job `scan`; other hits logged only.
+- *bandwidth:* `open_job`, `_bw_pending[dev]`, `call_later(timeout+5)` fails the entry, headset disconnect fails it, `bandwidth_result` ignores unknown jobs; job `summary` (n, median, min with label, failed); `dev.bandwidth` in `to_json` only. Refused with no override: brake active, playing target, test already pending. Default parallel 1, max 8; source video >= 1 MB.
+- *web/GUI:* connect/purge in `adb_actions`, `POST /api/adb/scan`; NETWORK card (Connect all, Purge..., Scan subnet..., Bandwidth test).
+- *sim, fakeadb:* sim answers `bandwidth_test` over HTTP; fake `disconnect` plus `FAKE_ADB_DISCONNECT_FAIL`.
+- *player (core only):* `url`/`bytes` in `Messages.kt`, pure `BandwidthProbe`, `ContentManager` runs one test at a time on its own thread.
+- *docs:* PROTOCOL.md tables and API, HEADSET_SETUP.md section.

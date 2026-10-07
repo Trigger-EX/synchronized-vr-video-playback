@@ -117,6 +117,10 @@ data class ServerMessage(
     val names: List<String> = emptyList(),
     /** `sync_content` job id as a JSON literal (string or integer), echoed back; null when absent. */
     val job: String? = null,
+
+    // bandwidth_test (`seconds` and `job` are shared with the fields above)
+    val url: String? = null,
+    val bytes: Long = 0,
 ) {
     companion object {
         /** Parses one line from the server. Returns null for malformed JSON or a missing `type`. */
@@ -159,6 +163,8 @@ data class ServerMessage(
                     is Double -> if (j == Math.rint(j) && Math.abs(j) < 1e15) j.toLong().toString() else null
                     else -> null
                 },
+                url = o.str("url"),
+                bytes = o.long("bytes"),
             )
         }
     }

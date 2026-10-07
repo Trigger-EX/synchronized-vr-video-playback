@@ -40,6 +40,7 @@ object has a `type`. **All times are server-clock seconds** (the server's
 | `inventory` | `files: [{name, size}]` | after connecting and whenever local files change |
 | `status` | see below | every second |
 | `downloads_finished` | `ok: [names]`, `failed: [names]`, `cancelled`, `job` (echoed from `sync_content`; absent from older apps) | end of a `sync_content` job |
+| `bandwidth_result` | `job` (echoed), `ok`, `bytes` read, `seconds`, `mbps` (megabits/s over what was read), `error` | end of a `bandwidth_test` (also sent as `ok: false` when the headset refuses it: no url, busy downloading, a test already running) |
 | `pose` | `yaw`, `pitch`, `roll` (degrees, relative to the recentered front; yaw + = left, pitch + = up) | only while a `pose_stream` lease is active, at the requested rate; the server stores it silently (no dashboard refresh) |
 | `event` | `level` (`info`/`warn`/`error`), `message` | noteworthy things (shown in the operator window log) |
 
@@ -68,6 +69,7 @@ position error, + = ahead), `rate`, `mode`, `seek_time_ms`, `start_latency_ms`,
 | `message` | `text`, `seconds` | show text in the headset (`seconds: 0` clears it) |
 | `identify` | `name`, `seconds` | show the name in large text and beep |
 | `sync_content` | `files: [{name, size, url, sha256?}]`, `delete_others`, `job` | download missing/incomplete files one after another (HTTP Range resume); optionally delete other videos |
+| `bandwidth_test` | `job`, `url`, `bytes` (1-200 MB, default 20; the server clamps it to the file size), `seconds` (5-120, default 30) | GET `url` from the start, read and discard up to `bytes` or until `seconds` pass, then reply `bandwidth_result`. One test at a time, refused while downloading. Old apps ignore the message, so the server reports "timed out (player may not support bandwidth_test)" after `seconds` + 5 s |
 | `cancel_downloads` | | stop the current download job |
 | `delete_content` | `names` | delete videos (the loaded one is kept) |
 
@@ -159,6 +161,7 @@ SyncVR with plain HTTP calls. With `--password`, send HTTP basic auth (any user 
 | `POST /api/devices/<id>` | `{"name", "group"}` |
 | `DELETE /api/devices/<id>` | forget an offline headset |
 | `POST /api/command/preview` | same body as a command (`action`, `targets`, optional `dry_run`, default true) → `{"scope_text", "labels", "warnings", "every", "show_mode", "token", "needs_confirm"}`; nothing is sent to any headset |
+| `POST /api/adb/scan` | `{"cidr": "192.168.1.0/27"}` → `{"ok": true, "result": {"job", "addresses"}}`. Probes TCP 5555 on each host (private IPv4 ranges only; more than 32 hosts is a 400, never truncated), then `adb connect`s open hosts that are a known headset's saved address. Other open hosts are only logged. Runs as job `scan` |
 | `POST /api/show_mode` | `{"enabled": true\|false}` → `{"ok": true, "brake": {...}}`; anything but a boolean is a 400. See "Show Mode and brakes" |
 | `POST /api/features/<key>` | mark a feature as tested → `{"ok": true, "key", "tested": true}`; unknown key is a 400 |
 | `DELETE /api/features/<key>` | mark it untested again |
@@ -191,6 +194,9 @@ Actions:
 | `sleep`, `wake` | adb jobs; confirm token required (see below). Screen off (`input keyevent 223`) or on (`224`) |
 | `screen_refresh` | adb job; confirm token required. `min_asleep_s` (default 1, max 30). Sends one 223, polls `dumpsys power \| grep mWakefulness` until `Asleep` (3 s timeout), waits `min_asleep_s`, sends 224 and confirms `Awake`. Interrupts playback |
 | `poweroff` | adb job (`reboot -p`); confirm token required; gated by feature `power.poweroff`; `dry_run` defaults to true. A real (`dry_run: false`) power off of every headset (target `all`/omitted, or a list naming every known headset) is refused unless the command also has `"confirm_every": true` |
+| `connect` | adb job, no confirm token. `adb connect <ip>:5555` for each target's saved IP, once per distinct address; a shared address reports "same address as X", a headset with no IP "no saved address" |
+| `purge` | adb job; confirm token (hashes the saved addresses, not `adb devices`); gated by feature `adb.purge`; `dry_run` defaults to true. Per address: `adb disconnect <ip>:5555`, 0.5 s, `adb connect`. A live purge is refused while the CLI push lock is held or any adb or scan job runs; Show Mode only adds a warning. The preview also returns `dry_run_choice` and `tokens: {dry_run, live}` |
+| `bandwidth_test` | gated by feature `debug.bandwidth`. `mb` (default 20, 1-200), `timeout_s` (default 30, 5-120), `parallel` (default 1, max 8), `video` (default: the largest in the library, at least 1 MB). Sends `bandwidth_test` to each online target, at most `parallel` at once. Refused outright (no override) when a brake is active (Show Mode, sync in progress, push lock), when any target is playing, or when a test is already pending for a target. Job result per headset: `<mbps> Mbps`; the finished job has `summary: {n, median, min, min_label, failed}` and each device in the snapshot carries its last `bandwidth` (`ok`, `mbps`, `bytes`, `seconds`, `error`, `t`; not persisted) |
 | `snapshot` | read-only adb job, gated by feature `debug.snapshot` (so `testing: true` works as for `poweroff`); no confirm token. `screenshot` (bool, default false) adds `adb exec-out screencap -p`. Writes `<data_dir>/snapshots/<label>_<serial>_<YYYYmmdd-HHMMSS-ffffff>/` on the server (nothing on the headset), one file per command: `power`, `display`, `window` (`dumpsys window windows`), `activity`, `audio`, `surfaceflinger`, `surfaceflinger_list`, `thermal`, `battery`, `logcat` (`-d -t 2000`), `getprop` (each `<name>.txt`), plus `screenshot.png` and `SUMMARY.txt` (wakefulness, display state, focus, thermal status, battery temperature). A command that fails or times out writes `<name>.error.txt` and the rest still run. Each headset's job result is `saved to <folder>` (with the failed command names); it is FAILED only when every command failed or the headset is unreachable. At most 4 headsets are captured at a time |
 
 Example:

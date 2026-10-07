@@ -46,6 +46,7 @@ class WebApp:
         r.add_get("/api/state", self.get_state)
         r.add_post("/api/command", self.post_command)
         r.add_post("/api/command/preview", self.post_preview)
+        r.add_post("/api/adb/scan", self.post_scan)
         r.add_post("/api/features/{key}", self.post_feature)
         r.add_delete("/api/features/{key}", self.delete_feature)
         r.add_post("/api/show_mode", self.post_show_mode)
@@ -85,6 +86,17 @@ class WebApp:
             action = body.get("action", "")
             listed = await self._adb_listing() if action in self.controller.adb_actions else None
             result = self.controller.execute(action, body, listed=listed)
+        except (CommandError, ValueError, TypeError, KeyError) as exc:
+            return _json_error(400, str(exc))
+        return web.json_response({"ok": True, "result": result})
+
+    async def post_scan(self, request):
+        try:
+            body = await self._body(request)
+            cidr = body.get("cidr")
+            if not isinstance(cidr, str) or not cidr.strip():
+                raise CommandError("cidr is required, e.g. 192.168.1.0/27")
+            result = self.controller.scan(cidr, listed=await self._adb_listing())
         except (CommandError, ValueError, TypeError, KeyError) as exc:
             return _json_error(400, str(exc))
         return web.json_response({"ok": True, "result": result})

@@ -7,6 +7,8 @@ import threading
 
 from PySide6.QtCore import QObject, QTimer, Signal
 
+from ..controller import ADDRESS_ACTIONS
+
 DIRTY_POLL_MS = 250
 FALLBACK_MS = 1000
 
@@ -86,6 +88,9 @@ class Bridge(QObject):
 
     def command(self, action: str, targets, **params) -> None:
         """Run a controller action on `targets` ("all" or a list of headset ids)."""
+        if action in ADDRESS_ACTIONS:  # adb jobs: `adb devices` is fetched off the server loop first
+            self.confirmed_command(action, targets, **params)
+            return
         self._run(action, lambda c: c.execute(action, dict(params, targets=targets)))
 
     def _with_adb_listing(self, fn, done) -> None:
@@ -102,6 +107,11 @@ class Bridge(QObject):
             if not self._closed:
                 done(res)
         threading.Thread(target=work, name="syncvr-gui-adb", daemon=True).start()
+
+    def scan(self, cidr: str) -> None:
+        """Probe a small private subnet for adb and connect known headsets; `adb devices` is fetched off the loop."""
+        self._with_adb_listing(lambda c, listed: c.scan(cidr, listed=listed),
+                               lambda res: self.result.emit("scan", res if isinstance(res, dict) else {}))
 
     def preview(self, action: str, targets, **params) -> None:
         """Ask the server what `action` would hit; answered by the `previewed` signal."""

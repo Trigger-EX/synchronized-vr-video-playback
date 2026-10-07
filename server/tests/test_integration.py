@@ -524,3 +524,20 @@ async def test_finish_from_an_older_job_is_ignored(content_dir, tmp_path):
         task.cancel()
         await asyncio.gather(task, return_exceptions=True)
         await srv.stop()
+
+
+async def test_bandwidth_test_end_to_end_over_http(server, fleet, content_dir):
+    make_mp4(content_dir / "big.mp4", duration=10.0, mdat_bytes=2_000_000)
+    server.controller.rescan()
+    headsets = await fleet(2)
+    ids = [h.device_id for h in headsets]
+    body = await api(server, "bandwidth_test", testing=True, mb=1, timeout_s=10)
+    ctl = server.controller
+    job = ctl.jobs[body["result"]["job"]]
+    await wait_for(lambda: job["state"] != "running", timeout=15)
+    assert job["state"] == "done" and job["failed"] == 0
+    assert job["summary"]["n"] == 2 and job["summary"]["median"] > 0
+    for dev_id in ids:
+        bw = ctl.devices[dev_id].bandwidth
+        assert bw["ok"] and bw["mbps"] > 0 and bw["bytes"] >= 1024 * 1024
+        assert ctl.devices[dev_id].to_json()["bandwidth"]["ok"] is True

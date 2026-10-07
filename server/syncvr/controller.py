@@ -16,14 +16,14 @@ import logging
 import statistics
 import time
 import uuid
-from collections import Counter, OrderedDict, defaultdict, deque
+from collections import Counter, OrderedDict, defaultdict, deque, namedtuple
 from dataclasses import dataclass, field
 from typing import Any, Callable, Dict, Iterable, List, Optional
 
 from pathlib import Path
 
 from . import __version__, automation, features, watchdogs
-from .fleetops import MIN_ASLEEP_S, AdbFleet
+from .fleetops import ADB_PORT, MIN_ASLEEP_S, AdbFleet, scan_candidates
 from .library import Library, Video
 from .protocol import DEFAULT_SYNC_SETTINGS, server_clock, validate_settings
 
@@ -49,7 +49,18 @@ PLAYBACK_ACTIONS = ("load", "play", "pause", "seek", "stop")
 MAX_JOBS_KEPT = 20
 PREVIEW_NAMES_SHOWN = 8
 POWER_ACTIONS = frozenset({"sleep", "wake", "screen_refresh", "poweroff"})
-ADB_ACTIONS = POWER_ACTIONS | {"snapshot"}  # run through adb jobs; callers pre-fetch `adb devices` off the loop
+ADDRESS_ACTIONS = frozenset({"connect", "purge"})  # act on saved ip:5555 addresses, not on `adb devices` serials
+ADB_ACTIONS = POWER_ACTIONS | ADDRESS_ACTIONS | {"snapshot"}  # run through adb jobs; callers pre-fetch `adb devices` off the loop
+
+
+Addr = namedtuple("Addr", "device_id")  # a job item keyed by adb address (no known headset behind it)
+
+BW_DEFAULT_MB, BW_MAX_MB = 20, 200
+BW_DEFAULT_S, BW_MIN_S, BW_MAX_S = 30, 5, 120
+BW_MAX_PARALLEL = 8
+BW_MIN_VIDEO_BYTES = 1024 * 1024
+BW_GRACE_S = 5.0  # extra wait for the headset's reply before its entry fails
+BW_TIMEOUT_MSG = "timed out (player may not support bandwidth_test)"
 
 
 class CommandError(Exception):
@@ -75,6 +86,7 @@ class Device:
     desired: Optional[Dict[str, Any]] = None
     conn: Any = None
     pose: Optional[Dict[str, float]] = None  # latest {yaw,pitch,roll,t}; deliberately not in to_json
+    bandwidth: Optional[Dict[str, Any]] = None  # last bandwidth test result; shown, never persisted
 
     @property
     def label(self) -> str:
@@ -102,6 +114,7 @@ class Device:
             "status": self.status,
             "inventory": self.inventory,
             "desired": self.desired,
+            "bandwidth": self.bandwidth,
         }
 
 
@@ -266,6 +279,18 @@ class Controller:
         self.action_labels.update({"sleep": "Sleep", "wake": "Wake", "screen_refresh": "Screen refresh",
                                    "poweroff": "Power off", "snapshot": "Snapshot"})
         self.preview_warnings["screen_refresh"] = self._refresh_warnings
+        # actions whose token covers something other than `adb devices` serials: (targets) -> [(item, address)]
+        self.token_pairs: Dict[str, Callable[[List[Device]], List[tuple]]] = {
+            "connect": self._address_pairs, "purge": self._address_pairs}
+        self.gated_actions["purge"] = "adb.purge"
+        self.confirm_actions.add("purge")
+        self.gated_actions["bandwidth_test"] = "debug.bandwidth"
+        self.action_labels.update({"connect": "Connect", "purge": "Purge adb connections of",
+                                   "bandwidth_test": "Bandwidth test"})
+        self.preview_warnings["purge"] = self._purge_warnings
+        self._bw_pending: Dict[str, str] = {}  # device id -> job id of the test it is running
+        self._bw_timers: Dict[str, Any] = {}
+        self._bw_runs: Dict[str, dict] = {}
         self.loop: Optional[asyncio.AbstractEventLoop] = None  # where job results are marshalled to
         self.jobs: "OrderedDict[str, dict]" = OrderedDict()
         self.server_name = server_name
@@ -449,16 +474,8 @@ class Controller:
 
     # ------------------------------------------------------------------- jobs
 
-    def start_job(self, action: str, items: List[tuple], fn: Callable[[str], Any],
-                  on_failed: Optional[Callable[[str], None]] = None) -> dict:
-        """Run ``fn(adb_serial)`` for each ``(device, serial)`` on the shared executor.
-
-        An item whose serial is None is reported as unreachable without running ``fn``. ``on_failed(device_id)``
-        runs on the loop thread for each headset that failed or was unreachable.
-
-        Returns ``{"job": id}`` at once. Each result is marshalled back to the event loop thread with
-        call_soon_threadsafe, where it becomes one OK/FAILED log line; workers never touch controller state.
-        """
+    def open_job(self, action: str, ids: Iterable[str]) -> dict:
+        """Register a running job over ``ids`` (its total) and pin the event loop results are marshalled to."""
         try:
             loop = asyncio.get_running_loop()
         except RuntimeError:
@@ -467,16 +484,42 @@ class Controller:
             raise CommandError("the server is not running")
         self.loop = loop
         job_id = uuid.uuid4().hex[:8]
-        self.jobs[job_id] = {"id": job_id, "action": action, "state": "running", "total": len(items),
-                             "done": 0, "failed": 0, "started": time.time(), "results": []}
-        if on_failed is not None:
-            self._job_failed_cbs[job_id] = on_failed
+        job = {"id": job_id, "action": action, "state": "running", "total": len(list(ids)),
+               "done": 0, "failed": 0, "started": time.time(), "results": []}
+        self.jobs[job_id] = job
         while len(self.jobs) > MAX_JOBS_KEPT:
-            self._job_failed_cbs.pop(self.jobs.popitem(last=False)[0], None)
+            old = self.jobs.popitem(last=False)[0]
+            self._job_failed_cbs.pop(old, None)
+            self._bw_runs.pop(old, None)
+        return job
 
-        def work(dev_id: str, serial: Optional[str]) -> None:
+    def start_job(self, action: str, items: List[tuple], fn: Callable[[str], Any],
+                  on_failed: Optional[Callable[[str], None]] = None,
+                  notes: Optional[Dict[str, str]] = None) -> dict:
+        """Run ``fn(adb_serial)`` for each ``(item, serial)`` on the shared executor.
+
+        ``item`` is a device or anything with a ``device_id`` (an :data:`Addr` for jobs keyed by address). An item
+        whose serial is None is reported as unreachable without running ``fn``, or with ``notes[device_id]``.
+        ``on_failed(device_id)`` runs on the loop thread for each headset that failed or was unreachable.
+
+        Returns ``{"job": id}`` at once. Each result is marshalled back to the event loop thread with
+        call_soon_threadsafe, where it becomes one OK/FAILED log line; workers never touch controller state.
+        """
+        job = self.open_job(action, [dev.device_id for dev, _ in items])
+        if on_failed is not None:
+            self._job_failed_cbs[job["id"]] = on_failed
+        for dev, serial in items:
+            self._submit(job["id"], dev.device_id, serial, fn, (notes or {}).get(dev.device_id))
+        self.changed()
+        return {"job": job["id"]}
+
+    def _submit(self, job_id: str, dev_id: str, serial: Optional[str], fn: Callable[[str], Any],
+                note: Optional[str] = None) -> None:
+        loop = self.loop
+
+        def work() -> None:
             if serial is None:
-                ok, message = False, "unreachable (not reachable by adb)"
+                ok, message = False, note or "unreachable (not reachable by adb)"
             else:
                 ok, message = self._run_one(fn, serial)
             try:
@@ -484,10 +527,7 @@ class Controller:
             except RuntimeError:
                 pass  # loop closed: the server is shutting down
 
-        for dev, serial in items:
-            self.fleet.submit(work, dev.device_id, serial)
-        self.changed()
-        return {"job": job_id}
+        self.fleet.submit(work)
 
     @staticmethod
     def _run_one(fn: Callable[[str], Any], serial: str) -> tuple:
@@ -496,7 +536,7 @@ class Controller:
         except Exception as exc:  # a failing headset must not take the job down
             return False, str(exc) or type(exc).__name__
 
-    def _job_result(self, job_id: str, dev_id: str, ok: bool, message: str) -> None:
+    def _job_result(self, job_id: str, dev_id: str, ok: bool, message: str, mbps: Optional[float] = None) -> None:
         job = self.jobs.get(job_id)
         if job is None:
             return
@@ -504,17 +544,41 @@ class Controller:
         label = dev.label if dev else dev_id
         job["done"] += 1
         job["failed"] += not ok
-        job["results"].append({"device": dev_id, "ok": ok, "message": message})
+        entry = {"device": dev_id, "ok": ok, "message": message}
+        if mbps is not None:
+            entry["mbps"] = mbps
+        job["results"].append(entry)
         callback = self._job_failed_cbs.get(job_id)
         if not ok and callback is not None:
             callback(dev_id)
-        if job["done"] >= job["total"]:
-            self._job_failed_cbs.pop(job_id, None)
-        if job["done"] >= job["total"]:
-            job["state"] = "failed" if job["failed"] == job["total"] else "done"
         self.log_event("info" if ok else "error",
                        f"{job['action']}: {label} {'OK' if ok else 'FAILED'}" + (f" ({message})" if message else ""),
                        dev)
+        self._settle_job(job)
+
+    def _settle_job(self, job: dict) -> None:
+        """Close the job once every result is in (and a scan has finished probing)."""
+        if job["state"] != "running" or job["done"] < job["total"] or job.get("probing"):
+            return
+        job["state"] = "failed" if job["failed"] and job["failed"] == job["total"] else "done"
+        self._job_failed_cbs.pop(job["id"], None)
+        if job["action"] == "bandwidth_test":
+            self._bw_summary(job)
+
+    def _bw_summary(self, job: dict) -> None:
+        rates = [(r["mbps"], r["device"]) for r in job["results"] if r["ok"] and r.get("mbps")]
+        failed = job["failed"]
+        if not rates:
+            job["summary"] = {"n": 0, "median": None, "min": None, "min_label": None, "failed": failed}
+            self.log_event("error", f"bandwidth_test: no results, {failed} failed")
+            return
+        low, low_id = min(rates)
+        dev = self.devices.get(low_id)
+        label = dev.label if dev else low_id
+        median = round(statistics.median(r for r, _ in rates), 2)
+        job["summary"] = {"n": len(rates), "median": median, "min": low, "min_label": label, "failed": failed}
+        self.log_event("info", f"bandwidth_test: {len(rates)} OK, median {median:g} Mbps, "
+                               f"min {low:g} Mbps ({label}), {failed} failed")
 
     def reachable(self, targets: List[Device], listed=None) -> List[tuple]:
         """``(device, adb serial)`` for each target; the serial is None when adb cannot reach it."""
@@ -535,6 +599,36 @@ class Controller:
     def _dry_run(params: dict) -> bool:
         return bool(params.get("dry_run", True))
 
+    def _pairs_for(self, action: str, targets: List[Device], listed=None) -> List[tuple]:
+        """The ``(item, serial)`` pairs a confirmation token covers: saved addresses or `adb devices` serials."""
+        pairs_fn = self.token_pairs.get(action)
+        return pairs_fn(targets) if pairs_fn is not None else self.reachable(targets, listed)
+
+    @staticmethod
+    def _address_plan(targets: List[Device]) -> List[tuple]:
+        """``(item, address or None, note)`` per target: one entry per distinct saved ``ip:5555``."""
+        plan, seen = [], {}
+        for dev in targets:
+            if not dev.ip:
+                plan.append((dev, None, "no saved address"))
+                continue
+            address = f"{dev.ip}:{ADB_PORT}"
+            if address in seen:
+                plan.append((dev, None, f"same address as {seen[address].label}"))
+                continue
+            seen[address] = dev
+            plan.append((Addr(address), address, None))
+        return plan
+
+    def _address_pairs(self, targets: List[Device]) -> List[tuple]:
+        return [(item, address) for item, address, _ in self._address_plan(targets)]
+
+    def _purge_warnings(self, targets: List[Device], params: dict) -> List[str]:
+        warnings = ["Purge drops each headset's adb connection and reconnects it; adb jobs are refused meanwhile."]
+        if automation.push_in_progress(self.data_dir):
+            warnings.append("A push is in progress: a live purge will be refused until it finishes.")
+        return warnings
+
     def _token(self, action: str, pairs: List[tuple], dry_run: bool) -> str:
         serials = sorted(serial or f"unreachable:{d.device_id}" for d, serial in pairs)
         blob = json.dumps([action, serials, dry_run], separators=(",", ":"))
@@ -552,7 +646,7 @@ class Controller:
         targets = self.resolve_targets(params.get("targets"))
         if not targets:
             raise CommandError("no headsets match the selected targets")
-        pairs = self.reachable(targets, listed)
+        pairs = self._pairs_for(action, targets, listed)
         labels = [d.label for d in targets]
         verb = self.action_labels.get(action) or action.replace("_", " ").capitalize()
         if len(targets) == len(self.devices):
@@ -563,20 +657,25 @@ class Controller:
                 names += f" and {len(labels) - PREVIEW_NAMES_SHOWN} more"
             scope = f"{verb} {len(targets)} headset{'s' if len(targets) != 1 else ''}: {names}"
         warnings = []
-        if action == "poweroff" and self._dry_run(params):
+        if action in ("poweroff", "purge") and self._dry_run(params):
             warnings.append("Dry run: nothing will be sent to the headsets.")
         down = [d.label for d, serial in pairs if serial is None]
         if down:
-            warnings.append(f"{len(down)} not reachable by adb: {', '.join(down[:PREVIEW_NAMES_SHOWN])}")
+            what = "without a usable saved address" if action in ADDRESS_ACTIONS else "not reachable by adb"
+            warnings.append(f"{len(down)} {what}: {', '.join(down[:PREVIEW_NAMES_SHOWN])}")
         if self.show_mode:
             warnings.append(automation.SHOW_MODE_WARNING)
         extra = self.preview_warnings.get(action)
         if extra is not None:
             warnings.extend(extra(targets, params))
-        return {"scope_text": scope, "labels": labels, "warnings": warnings,
-                "every": len(targets) == len(self.devices), "show_mode": self.show_mode,
-                "token": self._token(action, pairs, self._dry_run(params)),
-                "needs_confirm": action in self.confirm_actions}
+        result = {"scope_text": scope, "labels": labels, "warnings": warnings,
+                  "every": len(targets) == len(self.devices), "show_mode": self.show_mode,
+                  "token": self._token(action, pairs, self._dry_run(params)),
+                  "needs_confirm": action in self.confirm_actions}
+        if action == "purge":  # the dialog's dry-run tick picks the matching token without a new preview
+            result["dry_run_choice"] = True
+            result["tokens"] = {"dry_run": self._token(action, pairs, True), "live": self._token(action, pairs, False)}
+        return result
 
     @staticmethod
     def _is_playing(dev: Device) -> bool:
@@ -598,7 +697,7 @@ class Controller:
             raise CommandError(f"{label} is not marked as tested; use the Testing section "
                                f"(or send testing: true) to run it")
         if action in self.confirm_actions:
-            token = self._token(action, self.reachable(targets, listed), self._dry_run(params))
+            token = self._token(action, self._pairs_for(action, targets, listed), self._dry_run(params))
             if params.get("confirm") != token:
                 raise CommandError("confirmation missing or out of date (headsets changed since the "
                                    "preview); request a new preview and confirm again")
@@ -659,6 +758,8 @@ class Controller:
         self._held.pop(dev.device_id, None)
         self.dirty = True  # remember when it was last seen
         self.distributor.disconnected(dev.device_id)
+        if dev.device_id in self._bw_pending:
+            self._bw_fail(dev.device_id, "headset disconnected")
         self.log_event("warn", f"{dev.label} disconnected", dev)
 
     def headset_message(self, dev: Device, msg: dict) -> None:
@@ -690,6 +791,8 @@ class Controller:
             level = msg.get("level", "info")
             self.log_event(level if level in ("info", "warn", "error") else "info",
                            f"{dev.label}: {msg.get('message', '')}", dev)
+        elif kind == "bandwidth_result":
+            self._bw_result(dev, msg)
         else:
             log.debug("ignoring %s from %s", kind, dev.label)
 
@@ -855,6 +958,216 @@ class Controller:
         data_dir = self.data_dir
         return self.start_job("snapshot", items,
                               lambda serial: self.fleet.snapshot(serial, labels.get(serial, serial), data_dir, shot))
+
+    def _act_connect(self, targets, params):
+        plan = self._address_plan(targets)
+        notes = {item.device_id: note for item, _, note in plan if note}
+        return self.start_job("connect", [(item, address) for item, address, _ in plan], self.fleet.connect,
+                              notes=notes)
+
+    def _act_purge(self, targets, params):
+        dry = self._dry_run(params)
+        if not dry:
+            if automation.push_in_progress(self.data_dir):
+                raise CommandError("refusing to purge while a push is in progress (the CLI push lock is held)")
+            busy = [j["action"] for j in self.jobs.values()
+                    if j["state"] == "running" and (j["action"] in self.adb_actions or j["action"] == "scan")]
+            if busy:
+                raise CommandError(f"refusing to purge while an adb job is running ({busy[0]}); wait for it to finish")
+        plan = self._address_plan(targets)
+        self.log_event("info", f"purge {'dry run: would reconnect' if dry else 'reconnecting'} "
+                               f"{sum(1 for _, a, _ in plan if a)} adb address(es)")
+        notes = {item.device_id: note for item, _, note in plan if note}
+        return self.start_job("purge", [(item, address) for item, address, _ in plan],
+                              lambda address: self.fleet.reconnect(address, dry_run=dry), notes=notes)
+
+    def scan(self, cidr, listed=None) -> dict:
+        """Probe a small private subnet for adb on 5555 and connect the open hosts that are known headsets."""
+        try:
+            ips = scan_candidates(cidr)
+        except ValueError as exc:
+            raise CommandError(str(exc))
+        if any(j["action"] == "scan" and j["state"] == "running" for j in self.jobs.values()):
+            raise CommandError("a scan is already running")
+        job = self.open_job("scan", [])
+        job.update(probing=len(ips), probed=len(ips), open=0, cidr=str(cidr).strip())
+        loop, listed = self.loop, set(listed or ())
+
+        def probe(ip: str) -> None:
+            try:
+                found = self.fleet.probe(ip)
+            except Exception:
+                found = False
+            try:
+                loop.call_soon_threadsafe(self._scan_probed, job["id"], ip, found, listed)
+            except RuntimeError:
+                pass  # loop closed
+
+        for ip in ips:
+            self.fleet.submit(probe, ip)
+        self.changed()
+        return {"job": job["id"], "addresses": len(ips)}
+
+    def _scan_probed(self, job_id: str, ip: str, found: bool, listed) -> None:
+        job = self.jobs.get(job_id)
+        if job is None:
+            return
+        job["probing"] -= 1
+        address = f"{ip}:{ADB_PORT}"
+        if found:
+            job["open"] += 1
+            known = any(d.ip == ip for d in self.devices.values())
+            if not known:  # not ours: never touch it
+                self.log_event("info", f"scan: {address} is open but not a known SyncVR headset; not connecting")
+            else:
+                job["total"] += 1
+                if address in listed:
+                    self._job_result(job_id, address, True, "already connected")
+                else:
+                    self._submit(job_id, address, address, self.fleet.connect)
+        if job["probing"] <= 0:
+            job.pop("probing", None)
+            self.log_event("info", f"scan {job['cidr']}: {job['probed']} probed, {job['open']} open, "
+                                   f"{job['total']} known headset(s)")
+            self._settle_job(job)
+        self.changed()
+
+    # ------------------------------------------------------------- bandwidth
+
+    def _bw_queued(self, dev_id: str) -> bool:
+        return any(dev_id in run["queue"] for run in self._bw_runs.values())
+
+    @staticmethod
+    def _bw_number(params: dict, key: str, default, low, high) -> float:
+        raw = params.get(key)
+        if raw is None:
+            return default
+        try:
+            value = float(raw)
+        except (TypeError, ValueError):
+            raise CommandError(f"{key} must be a number")
+        if value != value:
+            raise CommandError(f"{key} must be a number")
+        return max(low, min(high, value))
+
+    def _bw_refusal(self, dev: Device) -> Optional[str]:
+        """Why one headset must not take a test right now (checked again when it is sent)."""
+        if not dev.online:
+            return "offline"
+        reason = self.brake()
+        if reason:
+            return f"not run: {'Show Mode is on' if reason == automation.REASON_SHOW_MODE else reason}"
+        if self._is_playing(dev):
+            return "not run: headset is playing"
+        return None
+
+    def _act_bandwidth_test(self, targets, params):
+        reason = self.brake()
+        if reason:
+            raise CommandError("bandwidth test refused: " +
+                               ("Show Mode is on" if reason == automation.REASON_SHOW_MODE else reason))
+        playing = [d.label for d in targets if self._is_playing(d)]
+        if playing:
+            raise CommandError(f"bandwidth test refused: playing now: {', '.join(playing[:PREVIEW_NAMES_SHOWN])}")
+        busy = [d.label for d in targets if d.device_id in self._bw_pending or self._bw_queued(d.device_id)]
+        if busy:
+            raise CommandError(f"bandwidth test already running on: {', '.join(busy[:PREVIEW_NAMES_SHOWN])}")
+        if not any(d.online for d in targets):
+            raise CommandError("no targeted headset is online")
+        mb = int(self._bw_number(params, "mb", BW_DEFAULT_MB, 1, BW_MAX_MB))
+        seconds = int(self._bw_number(params, "timeout_s", BW_DEFAULT_S, BW_MIN_S, BW_MAX_S))
+        parallel = int(self._bw_number(params, "parallel", 1, 1, BW_MAX_PARALLEL))
+        name = params.get("video")
+        if name:
+            video = self._video(name)
+        elif self.library.videos:
+            video = max(self.library.videos.values(), key=lambda v: v.size)
+        else:
+            raise CommandError("the library has no video to download for the test")
+        if video.size < BW_MIN_VIDEO_BYTES:
+            raise CommandError(f"{video.name} is smaller than 1 MB; pick a larger video")
+        job = self.open_job("bandwidth_test", [d.device_id for d in targets])
+        run = {"queue": deque(), "running": set(), "parallel": parallel, "video": video.name,
+               "bytes": min(mb * 1024 * 1024, video.size), "seconds": seconds}
+        self._bw_runs[job["id"]] = run
+        for dev in targets:
+            if dev.online:
+                run["queue"].append(dev.device_id)
+            else:
+                self._job_result(job["id"], dev.device_id, False, "offline")
+        self._bw_pump(job["id"])
+        return {"job": job["id"]}
+
+    def _bw_pump(self, job_id: str) -> None:
+        run = self._bw_runs.get(job_id)
+        if run is None:
+            return
+        while run["queue"] and len(run["running"]) < run["parallel"]:
+            dev_id = run["queue"].popleft()
+            dev = self.devices.get(dev_id)
+            refusal = self._bw_refusal(dev) if dev is not None else "unknown headset"
+            if refusal:
+                self._job_result(job_id, dev_id, False, refusal)
+                continue
+            try:
+                url = dev.conn.content_url(run["video"])
+                dev.conn.send({"type": "bandwidth_test", "job": job_id, "url": url,
+                               "bytes": run["bytes"], "seconds": run["seconds"]})
+            except Exception as exc:
+                self._job_result(job_id, dev_id, False, f"could not send: {exc}")
+                continue
+            self._bw_pending[dev_id] = job_id
+            run["running"].add(dev_id)
+            self._bw_timers[dev_id] = self.loop.call_later(run["seconds"] + BW_GRACE_S, self._bw_timeout,
+                                                           dev_id, job_id)
+        job = self.jobs.get(job_id)
+        if job is None or job["state"] != "running":
+            self._bw_runs.pop(job_id, None)
+        self.changed()
+
+    def _bw_clear(self, dev_id: str, job_id: str) -> None:
+        self._bw_pending.pop(dev_id, None)
+        timer = self._bw_timers.pop(dev_id, None)
+        if timer is not None:
+            timer.cancel()
+        run = self._bw_runs.get(job_id)
+        if run is not None:
+            run["running"].discard(dev_id)
+
+    def _bw_fail(self, dev_id: str, message: str) -> None:
+        job_id = self._bw_pending.get(dev_id)
+        if job_id is None:
+            return
+        self._bw_clear(dev_id, job_id)
+        dev = self.devices.get(dev_id)
+        if dev is not None:
+            dev.bandwidth = {"ok": False, "mbps": None, "bytes": 0, "seconds": 0.0, "error": message,
+                             "t": time.time()}
+        self._job_result(job_id, dev_id, False, message)
+        self._bw_pump(job_id)
+
+    def _bw_timeout(self, dev_id: str, job_id: str) -> None:
+        if self._bw_pending.get(dev_id) == job_id:
+            self._bw_fail(dev_id, BW_TIMEOUT_MSG)
+
+    def _bw_result(self, dev: Device, msg: dict) -> None:
+        job_id = self._bw_pending.get(dev.device_id)
+        if job_id is None or str(msg.get("job")) != job_id:
+            log.debug("ignoring bandwidth_result for unknown job from %s", dev.label)
+            return
+        try:
+            mbps = float(msg.get("mbps"))
+            size, secs = int(msg.get("bytes") or 0), float(msg.get("seconds") or 0.0)
+        except (TypeError, ValueError):
+            mbps, size, secs = 0.0, 0, 0.0
+        ok = msg.get("ok") is True and mbps == mbps and 0 < mbps < float("inf")
+        error = "" if ok else str(msg.get("error") or "test failed")
+        self._bw_clear(dev.device_id, job_id)
+        dev.bandwidth = {"ok": ok, "mbps": round(mbps, 2) if ok else None, "bytes": size, "seconds": secs,
+                         "error": error, "t": time.time()}
+        text = f"{mbps:.1f} Mbps ({size / 1048576:.1f} MB in {secs:.1f} s)" if ok else error
+        self._job_result(job_id, dev.device_id, ok, text, round(mbps, 2) if ok else None)
+        self._bw_pump(job_id)
 
     def _act_load(self, targets, params):
         video = self._video(params.get("video"))

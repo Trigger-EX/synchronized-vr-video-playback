@@ -4,7 +4,9 @@
 that dozens of headsets never mean dozens of simultaneous adb processes.
 """
 
+import ipaddress
 import re
+import socket
 import subprocess
 import threading
 import time
@@ -16,6 +18,7 @@ from .adbtool import Adb
 
 MAX_WORKERS = 10
 ADB_PORT = 5555
+MAX_SCAN_HOSTS = 32
 
 KEYEVENT_SLEEP = 223  # KEYCODE_SLEEP: screen off, never toggles
 KEYEVENT_WAKEUP = 224  # KEYCODE_WAKEUP: screen on, never toggles
@@ -91,6 +94,22 @@ def resolve_serials(devices: Sequence, listed: Iterable[str]) -> Tuple[Dict[str,
     return result, notes
 
 
+def scan_candidates(cidr: str) -> list:
+    """Host addresses of ``cidr`` to probe. Private ranges only, at most 32 hosts; larger ranges are refused."""
+    try:
+        net = ipaddress.ip_network(str(cidr).strip(), strict=False)
+    except ValueError as exc:
+        raise ValueError(f"not a valid subnet: {cidr!r}") from exc
+    if net.version != 4:
+        raise ValueError("only IPv4 subnets can be scanned")
+    if not net.is_private:
+        raise ValueError(f"{net} is not a private range; refusing to scan it")
+    hosts = max(net.num_addresses - 2, 1) if net.prefixlen < 31 else net.num_addresses
+    if hosts > MAX_SCAN_HOSTS:
+        raise ValueError(f"{net} has {hosts} hosts; the limit is {MAX_SCAN_HOSTS} (use /27 or smaller)")
+    return [str(h) for h in net.hosts()]
+
+
 class ListingFailed(RuntimeError):
     """``adb devices`` itself failed (as opposed to reporting no devices)."""
 
@@ -159,6 +178,29 @@ class AdbFleet:
         if "connected to" not in out:  # also matches "already connected to"
             raise RuntimeError(out or f"could not connect to {address}")
         return out
+
+    def disconnect(self, address: str) -> str:
+        """``adb disconnect <address>``; like connect, the message decides."""
+        out = self.adb.run(None, "disconnect", address)
+        if "disconnected" not in out:
+            raise RuntimeError(out or f"could not disconnect {address}")
+        return out
+
+    def reconnect(self, address: str, dry_run: bool = True) -> str:
+        if dry_run:
+            return f"would disconnect and reconnect {address} (dry run, nothing sent)"
+        self.disconnect(address)
+        self.sleeper(0.5)
+        self.connect(address)
+        return f"reconnected {address}"
+
+    def probe(self, ip: str, port: int = ADB_PORT, timeout: float = 0.5) -> bool:
+        """True when a TCP connection to ``ip:port`` opens."""
+        try:
+            with socket.create_connection((ip, port), timeout=timeout):
+                return True
+        except OSError:
+            return False
 
     def wakefulness(self, serial: str) -> str:
         """``Awake``, ``Asleep``, ``Dozing``, ``Dreaming`` or ``unknown`` (unparseable output)."""

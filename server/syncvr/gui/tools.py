@@ -1,4 +1,4 @@
-"""Tools tab (Power and Testing cards) and the preview-then-confirm flow every fleet adb action goes through."""
+"""Tools tab (Power, Network and Testing cards) and the preview-then-confirm flow every fleet adb action goes through."""
 
 import time
 from html import escape
@@ -18,6 +18,8 @@ from .theme import mark, set_property
 POWER_ACTIONS = (("sleep", "Sleep"), ("wake", "Wake"), ("screen_refresh", "Screen refresh"))
 POWEROFF_FEATURE = "power.poweroff"
 SNAPSHOT_FEATURE = "debug.snapshot"
+PURGE_FEATURE = "adb.purge"
+BANDWIDTH_FEATURE = "debug.bandwidth"
 TERMINAL_FEATURE = terminal.FEATURE
 SNAPSHOT_DIR = "snapshots"  # under the data folder; see diagnostics.SNAPSHOT_DIR
 STATUS_MS = 5000
@@ -37,7 +39,11 @@ class ConfirmDialog(QDialog):
         self.show_label.setObjectName("error")
         self.show_label.setWordWrap(True)
         self.show_label.setVisible(bool(preview.get("show_mode")))
-        others = [w for w in preview.get("warnings") or [] if w != SHOW_MODE_WARNING]  # shown above instead
+        self.dry_run_check = QCheckBox("Dry run (log what would happen, send nothing)")
+        self.dry_run_check.setChecked(bool(preview.get("dry_run", True)))
+        self.dry_run_check.setVisible(bool(preview.get("dry_run_choice")))
+        others = [w for w in preview.get("warnings") or [] if w != SHOW_MODE_WARNING  # shown above instead
+                  and not (preview.get("dry_run_choice") and w.startswith("Dry run:"))]  # the tick says it
         self.warning_label = QLabel("<br>".join(escape(w) for w in others))
         self.warning_label.setTextFormat(Qt.RichText)
         self.warning_label.setWordWrap(True)
@@ -52,12 +58,16 @@ class ConfirmDialog(QDialog):
         self.buttons.rejected.connect(self.reject)
         self.every_check.toggled.connect(lambda _c: self._sync())
         lay = QVBoxLayout(self)
-        for w in (self.scope_label, self.show_label, self.warning_label, self.every_check, self.buttons):
+        for w in (self.scope_label, self.show_label, self.warning_label, self.dry_run_check, self.every_check,
+                  self.buttons):
             lay.addWidget(w)
         self._sync()
 
     def _sync(self) -> None:
         self.ok_button.setEnabled(not self.every_check.isVisibleTo(self) or self.every_check.isChecked())
+
+    def dry_run(self) -> bool:
+        return self.dry_run_check.isChecked()
 
 
 class PoweroffDialog(QDialog):
@@ -181,10 +191,16 @@ class CommandConfirmer:
             self._send(action, preview, request)
             return
         shown = dict(preview, destructive=action == "poweroff" and request.get("dry_run", True) is False,
-                     verb=dict(POWER_ACTIONS, poweroff="Power off").get(action, "Confirm"))
-        if not self._exec(ConfirmDialog(shown, self._window)):
+                     verb=dict(POWER_ACTIONS, poweroff="Power off", purge="Purge").get(action, "Confirm"),
+                     dry_run=request.get("dry_run", True))
+        dialog = ConfirmDialog(shown, self._window)
+        if not self._exec(dialog):
             self._window.statusBar().showMessage("Cancelled: %s" % preview.get("scope_text", action), STATUS_MS)
             return
+        if preview.get("dry_run_choice"):  # the dialog's tick decides; the server priced both tokens
+            dry = dialog.dry_run()
+            preview = dict(preview, token=(preview.get("tokens") or {}).get("dry_run" if dry else "live"))
+            request = dict(request, dry_run=dry)
         self._send(action, preview, request)
 
     def _send(self, action: str, preview: dict, request: dict) -> None:
@@ -247,6 +263,37 @@ class ToolsTab(QWidget):
         dlay.addLayout(drow)
         dlay.addWidget(self.debug_note)
 
+        self.connect_button = QPushButton("Connect all")
+        self.connect_button.clicked.connect(lambda _c=False: self.run_connect())
+        self.purge_button = QPushButton("Purge...")
+        mark(self.purge_button, danger=True)
+        self.purge_button.clicked.connect(lambda _c=False: self.run_purge())
+        self.scan_input = QLineEdit()
+        self.scan_input.setPlaceholderText("Subnet to scan, e.g. 192.168.1.0/27 (private, at most 32 hosts)")
+        self.scan_button = QPushButton("Scan subnet...")
+        self.scan_button.clicked.connect(lambda _c=False: self.run_scan())
+        self.bandwidth_button = QPushButton("Bandwidth test")
+        self.bandwidth_button.clicked.connect(lambda _c=False: self.run_bandwidth())
+        nrow = QHBoxLayout()
+        for w in (self.connect_button, self.purge_button, self.bandwidth_button):
+            nrow.addWidget(w)
+        nrow.addStretch(1)
+        srow = QHBoxLayout()
+        srow.addWidget(self.scan_input, 1)
+        srow.addWidget(self.scan_button)
+        self.network_note = QLabel("Connect all runs adb connect to every saved headset address. Purge drops those "
+                                   "connections and reconnects them (dry run unless you untick it). Scan probes a "
+                                   "small private subnet and connects known headsets. Bandwidth test makes the "
+                                   "selected idle headsets download part of a video and reports Mbps.")
+        self.network_note.setWordWrap(True)
+        self.network_note.setObjectName("fieldHelp")
+        network = QGroupBox("NETWORK")
+        network.setObjectName("toolCard")
+        nlay = QVBoxLayout(network)
+        nlay.addLayout(nrow)
+        nlay.addLayout(srow)
+        nlay.addWidget(self.network_note)
+
         self.wd_rows = {}
         self._watchdogs = {}
         self.wd_grid = QGridLayout()
@@ -287,6 +334,7 @@ class ToolsTab(QWidget):
         play.setSpacing(18)
         play.addWidget(power)
         play.addWidget(debug)
+        play.addWidget(network)
         play.addWidget(wd_card)
         play.addWidget(testing)
         play.addStretch(1)
@@ -322,6 +370,29 @@ class ToolsTab(QWidget):
 
     def _exec(self, dialog) -> bool:
         return dialog.exec() == QDialog.Accepted
+
+    # ----------------------------------------------------------- network
+
+    def _tested(self, key: str) -> bool:
+        return any(f.get("key") == key and f.get("tested") for f in self._features)
+
+    def run_connect(self) -> None:
+        self._window.bridge.command("connect", "all")
+
+    def run_purge(self, testing: bool = False) -> None:
+        params = {"testing": True} if testing or not self._tested(PURGE_FEATURE) else {}
+        self._window.confirmer.request("purge", self._window.target_spec(), **params)
+
+    def run_scan(self) -> None:
+        cidr = self.scan_input.text().strip()
+        if not cidr:
+            self._window.statusBar().showMessage("Enter a subnet to scan, e.g. 192.168.1.0/27.", STATUS_MS)
+            return
+        self._window.bridge.scan(cidr)
+
+    def run_bandwidth(self, testing: bool = False) -> None:
+        params = {"testing": True} if testing or not self._tested(BANDWIDTH_FEATURE) else {}
+        self._window.confirmer.request("bandwidth_test", self._window.target_spec(), **params)
 
     # ------------------------------------------------------------ debug
 
@@ -371,6 +442,9 @@ class ToolsTab(QWidget):
         self.snapshot_button.setEnabled(self.snapshot_tested())
         self.snapshot_button.setToolTip("" if self.snapshot_tested() else
                                         "Not marked tested yet: use Open in the Testing card")
+        for key, button in ((PURGE_FEATURE, self.purge_button), (BANDWIDTH_FEATURE, self.bandwidth_button)):
+            button.setEnabled(self._tested(key))
+            button.setToolTip("" if self._tested(key) else "Not marked tested yet: use Open in the Testing card")
         untested = [f for f in self._features if not f.get("tested")]
         keys = [f["key"] for f in untested]
         if keys != list(self.testing_buttons):
@@ -395,6 +469,12 @@ class ToolsTab(QWidget):
                     opener.clicked.connect(lambda _c=False: self.open_poweroff(testing=True))
                     self.testing_grid.addWidget(opener, i, column)
                     column += 1
+                for key, opener_fn in ((PURGE_FEATURE, self.run_purge), (BANDWIDTH_FEATURE, self.run_bandwidth)):
+                    if f["key"] == key:
+                        opener = QPushButton("Open")
+                        opener.clicked.connect(lambda _c=False, fn=opener_fn: fn(testing=True))
+                        self.testing_grid.addWidget(opener, i, column)
+                        column += 1
                 if f["key"] == TERMINAL_FEATURE:
                     opener = QPushButton("Open")
                     opener.setToolTip("Open a terminal for testing: on the selected headset, or local when none is selected")

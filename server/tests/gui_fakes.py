@@ -19,6 +19,9 @@ class FakeBridge(QObject):
     def command(self, action, targets, **params):
         self.calls.append((action, targets, params))
 
+    def scan(self, cidr):
+        self.calls.append(("scan", cidr))
+
     def preview(self, action, targets, **params):
         self.calls.append(("preview", action, targets, params))
 

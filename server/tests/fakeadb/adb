@@ -8,6 +8,7 @@
 #   FAKE_ADB_SLEEP_CMD substring of a command that sleeps $FAKE_ADB_SLEEP_CMD_S seconds (per-command timeout)
 #   FAKE_ADB_WINDOW   window fixture stem (default window); FAKE_ADB_LOGCAT file for `logcat -d -T` and `logcat -d -t N`
 #   FAKE_ADB_CONNECT_FAIL addresses whose `adb connect` prints failed (exit 0, like real adb)
+#   FAKE_ADB_DISCONNECT_FAIL addresses whose `adb disconnect` prints an error (exit 0, like real adb)
 #   FAKE_ADB_SLEEP    seconds every non-`devices` command takes (to exercise timeouts)
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 [ -n "$FAKE_ADB_LOG" ] && printf '%s\n' "$*" >> "$FAKE_ADB_LOG"
@@ -20,6 +21,10 @@ fi
 if [ "$1" = "connect" ]; then
   case " $FAKE_ADB_CONNECT_FAIL " in *" $2 "*) echo "failed to connect to '$2'"; exit 0;; esac
   echo "connected to $2"; exit 0
+fi
+if [ "$1" = "disconnect" ]; then
+  case " $FAKE_ADB_DISCONNECT_FAIL " in *" $2 "*) echo "error: no such device '$2'"; exit 0;; esac
+  echo "disconnected $2"; exit 0
 fi
 [ -n "$FAKE_ADB_SLEEP" ] && sleep "$FAKE_ADB_SLEEP"
 # Wakefulness: per-serial file in $FAKE_ADB_STATE (a directory) holding Awake or Asleep; default
