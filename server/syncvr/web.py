@@ -49,6 +49,8 @@ class WebApp:
         r.add_post("/api/features/{key}", self.post_feature)
         r.add_delete("/api/features/{key}", self.delete_feature)
         r.add_post("/api/show_mode", self.post_show_mode)
+        r.add_post("/api/watchdogs/{name}", self.post_watchdog)
+        r.add_post("/api/watchdogs/{name}/test_pattern", self.post_watchdog_pattern)
         r.add_get("/api/settings", self.get_settings)
         r.add_post("/api/settings", self.post_settings)
         r.add_post("/api/library/rescan", self.post_rescan)
@@ -115,6 +117,20 @@ class WebApp:
         except CommandError as exc:
             return _json_error(400, str(exc))
         return web.json_response({"ok": True, "brake": self.controller.brake_json()})
+
+    async def post_watchdog(self, request):
+        try:
+            result = self.controller.set_watchdog(request.match_info["name"], await self._body(request))
+        except CommandError as exc:
+            return _json_error(400, str(exc))
+        return web.json_response({"ok": True, "watchdog": result})
+
+    async def post_watchdog_pattern(self, request):
+        try:
+            result = self.controller.watchdog_test_pattern(request.match_info["name"], await self._body(request))
+        except CommandError as exc:
+            return _json_error(400, str(exc))
+        return web.json_response(dict(result, ok=True))
 
     async def get_settings(self, request):
         return web.json_response(self.controller.settings)

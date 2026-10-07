@@ -1,0 +1,6 @@
+WINDOW MANAGER WINDOWS (dumpsys window windows)
+  Window #0 Window{4d5e6f u0 com.syncvr.player/com.syncvr.player.MainActivity}:
+  Window #1 Window{9f8e7d u0 Application Not Responding: com.syncvr.player}:
+
+  mCurrentFocus=Window{9f8e7d u0 Application Not Responding: com.syncvr.player}
+  mFocusedApp=ActivityRecord{7a8b9c u0 com.syncvr.player/.MainActivity t42}

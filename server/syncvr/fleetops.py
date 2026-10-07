@@ -94,6 +94,23 @@ class AdbFleet:
         self.shell(serial, f"input keyevent {KEYEVENT_WAKEUP}")
         return "wake sent"
 
+    def launch(self, serial: str) -> str:
+        """Start the player (same ``monkey`` launch as ``syncvr adb launch``)."""
+        self.shell(serial, f"monkey -p {self.adb.package} -c android.intent.category.LAUNCHER 1 >/dev/null "
+                           f"&& echo launched")
+        return "launch sent"
+
+    def back(self, serial: str) -> str:
+        self.shell(serial, "input keyevent 4")  # KEYCODE_BACK
+        return "back sent"
+
+    def connect(self, address: str) -> str:
+        """``adb connect``; adb exits 0 even when it fails, so the message decides."""
+        out = self.adb.run(None, "connect", address)
+        if "connected to" not in out:  # also matches "already connected to"
+            raise RuntimeError(out or f"could not connect to {address}")
+        return out
+
     def wakefulness(self, serial: str) -> str:
         """``Awake``, ``Asleep``, ``Dozing``, ``Dreaming`` or ``unknown`` (unparseable output)."""
         match = _WAKEFULNESS.search(self.shell(serial, WAKEFULNESS_CMD))

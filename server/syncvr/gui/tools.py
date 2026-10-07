@@ -1,16 +1,18 @@
 """Tools tab (Power and Testing cards) and the preview-then-confirm flow every fleet adb action goes through."""
 
+import time
 from html import escape
 from pathlib import Path
 
 from PySide6.QtCore import Qt, QUrl
 from PySide6.QtGui import QDesktopServices
-from PySide6.QtWidgets import (QCheckBox, QDialog, QDialogButtonBox, QGridLayout, QGroupBox, QHBoxLayout, QLabel,
-                               QListWidget, QListWidgetItem, QPushButton, QScrollArea, QVBoxLayout, QWidget)
+from PySide6.QtWidgets import (QCheckBox, QDialog, QDialogButtonBox, QFileDialog, QGridLayout, QGroupBox, QHBoxLayout,
+                               QLabel, QLineEdit, QListWidget, QListWidgetItem, QPushButton, QScrollArea,
+                               QVBoxLayout, QWidget)
 
 from ..automation import SHOW_MODE_WARNING
 from . import format as fmt
-from .theme import mark
+from .theme import mark, set_property
 
 POWER_ACTIONS = (("sleep", "Sleep"), ("wake", "Wake"), ("screen_refresh", "Screen refresh"))
 POWEROFF_FEATURE = "power.poweroff"
@@ -94,6 +96,69 @@ class PoweroffDialog(QDialog):
 
     def dry_run(self) -> bool:
         return self.dry_run_check.isChecked()
+
+
+class ArmDialog(QDialog):
+    """Quotes the exact rule a watchdog will follow once armed. Nothing is armed until it is accepted."""
+
+    def __init__(self, wd: dict, parent=None):
+        super().__init__(parent)
+        self.wd = wd
+        self.setWindowTitle("Arm %s" % wd.get("title", wd.get("name", "")))
+        self.setMinimumWidth(420)
+        intro = QLabel("Once armed, this watchdog sends commands to headsets on its own, by this rule:")
+        intro.setWordWrap(True)
+        self.rule_label = QLabel(wd.get("rule", ""))
+        self.rule_label.setObjectName("target")
+        self.rule_label.setWordWrap(True)
+        self.rule_label.setTextInteractionFlags(Qt.TextSelectableByMouse)
+        self.untested_label = QLabel("This watchdog is not marked tested on real headsets. Arming it now is a test run.")
+        self.untested_label.setObjectName("error")
+        self.untested_label.setWordWrap(True)
+        self.untested_label.setVisible(not wd.get("tested"))
+        self.note = QLabel("Show Mode and active downloads still stop it from sending. Arming is forgotten when "
+                           "the server restarts.")
+        self.note.setObjectName("fieldHelp")
+        self.note.setWordWrap(True)
+        self.buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
+        self.ok_button = self.buttons.button(QDialogButtonBox.Ok)
+        self.ok_button.setText("Arm")
+        self.buttons.accepted.connect(self.accept)
+        self.buttons.rejected.connect(self.reject)
+        lay = QVBoxLayout(self)
+        for w in (intro, self.rule_label, self.untested_label, self.note, self.buttons):
+            lay.addWidget(w)
+
+
+class PatternDialog(QDialog):
+    """Matches of a pattern in a snapshot folder. Confirming is what lets the overheat watchdog be armed."""
+
+    def __init__(self, result: dict, parent=None):
+        super().__init__(parent)
+        self.result = result
+        self.setWindowTitle("Pattern test")
+        self.setMinimumSize(520, 360)
+        if result.get("error"):
+            head = "Cannot test: %s" % result["error"]
+        else:
+            head = "%d line%s matched in %s" % (result.get("total", 0), "" if result.get("total") == 1 else "s",
+                                                 ", ".join(result.get("files") or []))
+        self.head_label = QLabel(head)
+        self.head_label.setObjectName("target")
+        self.head_label.setWordWrap(True)
+        self.list = QListWidget()
+        for m in result.get("matches") or []:
+            self.list.addItem("%s:%d  %s" % (m["file"], m["line_no"], m["line"]))
+        self.buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
+        self.confirm_button = self.buttons.button(QDialogButtonBox.Ok)
+        self.confirm_button.setText("Confirm pattern")
+        self.confirm_button.setEnabled(not result.get("error") and bool(result.get("total")))
+        self.buttons.button(QDialogButtonBox.Cancel).setText("Close")
+        self.buttons.accepted.connect(self.accept)
+        self.buttons.rejected.connect(self.reject)
+        lay = QVBoxLayout(self)
+        for w in (self.head_label, self.list, self.buttons):
+            lay.addWidget(w)
 
 
 class CommandConfirmer:
@@ -180,6 +245,24 @@ class ToolsTab(QWidget):
         dlay.addLayout(drow)
         dlay.addWidget(self.debug_note)
 
+        self.wd_rows = {}
+        self._watchdogs = {}
+        self.wd_grid = QGridLayout()
+        self.wd_empty = QLabel("Waiting for the server...")
+        self.wd_empty.setObjectName("muted")
+        wd_note = QLabel("Watchdogs start observe-only: they log what they would do and send nothing. Arming "
+                         "lets one send, by the rule shown when you arm it. Arming is forgotten on restart.")
+        wd_note.setWordWrap(True)
+        wd_note.setObjectName("fieldHelp")
+        wd_card = QGroupBox("WATCHDOGS")
+        wd_card.setObjectName("toolCard")
+        wlay = QVBoxLayout(wd_card)
+        wlay.addWidget(wd_note)
+        wlay.addLayout(self.wd_grid)
+        wlay.addWidget(self.wd_empty)
+        self._last_test = None
+        self._window.bridge.result.connect(self.on_bridge_result)
+
         self.testing_grid = QGridLayout()
         self.testing_empty = QLabel("Every feature has been marked as tested.")
         self.testing_empty.setObjectName("muted")
@@ -202,6 +285,7 @@ class ToolsTab(QWidget):
         play.setSpacing(18)
         play.addWidget(power)
         play.addWidget(debug)
+        play.addWidget(wd_card)
         play.addWidget(testing)
         play.addStretch(1)
         scroll = QScrollArea()
@@ -312,3 +396,126 @@ class ToolsTab(QWidget):
                 self.testing_buttons[f["key"]] = button
             self.testing_grid.setColumnStretch(0, 1)
         self.testing_empty.setVisible(not untested)
+        self.update_watchdogs(snap.get("watchdogs") or [])
+
+    # --------------------------------------------------------- watchdogs
+
+    def _build_watchdog_row(self, wd: dict, row: int) -> dict:
+        name = wd["name"]
+        r = {"title": QLabel(wd.get("title") or name), "pill": QLabel(), "enable": QCheckBox("Enabled"),
+             "arm": QPushButton("Arm..."), "summary": QLabel()}
+        r["pill"].setObjectName("badge")
+        r["summary"].setObjectName("muted")
+        r["summary"].setWordWrap(True)
+        r["enable"].clicked.connect(lambda checked=False, n=name: self.set_enabled(n, bool(checked)))
+        r["arm"].clicked.connect(lambda _c=False, n=name: self.arm_or_disarm(n))
+        top = QHBoxLayout()
+        for w in (r["title"], r["pill"], r["enable"], r["arm"]):
+            top.addWidget(w)
+        top.addStretch(1)
+        box = QVBoxLayout()
+        box.addLayout(top)
+        if name == "overheat":
+            r["pattern"] = QLineEdit()
+            r["pattern"].setPlaceholderText("Regular expression for the overheat prompt (no built-in default)")
+            r["set_pattern"] = QPushButton("Set")
+            r["test_pattern"] = QPushButton("Test pattern against snapshot...")
+            r["pattern_state"] = QLabel()
+            r["pattern_state"].setObjectName("fieldHelp")
+            r["pattern_state"].setWordWrap(True)
+            r["set_pattern"].clicked.connect(lambda _c=False: self.set_pattern())
+            r["test_pattern"].clicked.connect(lambda _c=False: self.test_pattern())
+            prow = QHBoxLayout()
+            for w in (r["pattern"], r["set_pattern"], r["test_pattern"]):
+                prow.addWidget(w)
+            box.addLayout(prow)
+            box.addWidget(r["pattern_state"])
+        box.addWidget(r["summary"])
+        holder = QWidget()
+        holder.setLayout(box)
+        box.setContentsMargins(0, 4, 0, 8)
+        self.wd_grid.addWidget(holder, row, 0)
+        r["holder"] = holder
+        return r
+
+    def update_watchdogs(self, wds: list) -> None:
+        names = [w["name"] for w in wds]
+        if names != list(self.wd_rows):
+            for r in self.wd_rows.values():
+                r["holder"].deleteLater()
+            self.wd_rows = {}
+            for i, wd in enumerate(wds):
+                self.wd_rows[wd["name"]] = self._build_watchdog_row(wd, i)
+        self.wd_empty.setVisible(not wds)
+        self._watchdogs = {w["name"]: w for w in wds}
+        for wd in wds:
+            r = self.wd_rows[wd["name"]]
+            mode = wd.get("mode")
+            r["pill"].setText({"armed": "Armed", "observe": "Observe"}.get(mode, "Off"))
+            set_property(r["pill"], "state", {"armed": "syncing", "observe": "paused"}.get(mode, "offline"))
+            r["enable"].setChecked(bool(wd.get("enabled")))
+            blocker = wd.get("arm_blocker")
+            r["arm"].setText("Disarm" if wd.get("armed") else "Arm...")
+            r["arm"].setEnabled(bool(wd.get("armed")) or not blocker)
+            r["arm"].setToolTip("" if wd.get("armed") or not blocker else "Cannot arm: %s" % blocker)
+            r["summary"].setText(self.watchdog_summary(wd))
+            if "pattern" in r:
+                if not r["pattern"].hasFocus():
+                    r["pattern"].setText((wd.get("cfg") or {}).get("pattern", ""))
+                r["pattern_state"].setText("Pattern confirmed against a snapshot." if not blocker else blocker.capitalize() + ".")
+
+    @staticmethod
+    def watchdog_summary(wd: dict) -> str:
+        cycle = wd.get("last_cycle")
+        when = "last cycle %s" % time.strftime("%H:%M:%S", time.localtime(cycle)) if cycle else "no cycle yet"
+        text = "%s: %s" % (when, wd.get("last_summary") or "-") if cycle else when
+        decisions = wd.get("decisions") or []
+        if decisions:
+            text += "\nLast decision: %s%s" % ((decisions[-1].get("label") + ": ") if decisions[-1].get("label") else "",
+                                                 decisions[-1].get("text", ""))
+        return text
+
+    def set_enabled(self, name: str, enabled: bool) -> None:
+        self._window.bridge.set_watchdog(name, enabled=enabled)
+
+    def arm_or_disarm(self, name: str) -> None:
+        wd = (self._watchdogs or {}).get(name)
+        if wd is None:
+            return
+        if wd.get("armed"):
+            self._window.bridge.set_watchdog(name, armed=False)
+            return
+        if wd.get("arm_blocker"):
+            self._window.statusBar().showMessage("Cannot arm: %s" % wd["arm_blocker"], STATUS_MS)
+            return
+        if not self._exec(ArmDialog(wd, self)):
+            return
+        params = {"armed": True}
+        if not wd.get("tested"):
+            params["testing"] = True
+        self._window.bridge.set_watchdog(name, **params)
+
+    def set_pattern(self) -> None:
+        r = self.wd_rows.get("overheat")
+        if r is not None:
+            self._window.bridge.set_watchdog("overheat", cfg={"pattern": r["pattern"].text().strip()})
+
+    def _pick_folder(self):
+        base = self.snapshots_dir()
+        return QFileDialog.getExistingDirectory(self, "Snapshot folder", str(base) if base else "") or None
+
+    def test_pattern(self) -> None:
+        r = self.wd_rows.get("overheat")
+        folder = self._pick_folder()
+        if r is None or not folder:
+            return
+        self._last_test = {"folder": folder, "pattern": r["pattern"].text().strip()}
+        self._window.bridge.watchdog_test_pattern("overheat", **self._last_test)
+
+    def on_bridge_result(self, label: str, result) -> None:
+        if label != "watchdog_pattern" or not self._last_test or result.get("confirmed"):
+            if label == "watchdog_pattern" and result.get("confirmed"):
+                self._window.statusBar().showMessage("Overheat pattern confirmed.", STATUS_MS)
+            return
+        if self._exec(PatternDialog(result, self)):
+            self._window.bridge.watchdog_test_pattern("overheat", confirm=True, **self._last_test)

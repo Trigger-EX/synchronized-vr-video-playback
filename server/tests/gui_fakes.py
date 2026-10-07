@@ -53,6 +53,12 @@ class FakeBridge(QObject):
         self.calls.append(("pose", device_id))
         cb(self.next_pose)
 
+    def set_watchdog(self, name, **body):
+        self.calls.append(("set_watchdog", name, body))
+
+    def watchdog_test_pattern(self, name, **body):
+        self.calls.append(("watchdog_test_pattern", name, body))
+
     def set_show_mode(self, enabled):
         self.calls.append(("set_show_mode", enabled))
 

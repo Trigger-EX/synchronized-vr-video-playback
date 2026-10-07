@@ -115,6 +115,7 @@ class SyncServer:
             "addresses": local_ipv4_addresses(),
         }
         self._tasks = [asyncio.create_task(self._save_loop()), asyncio.create_task(self._rescan_loop())]
+        self.controller.watchdogs.start(loop)
         log.info("headset port TCP %d; operator API http://%s:%d/", self.headsets.port,
                  (local_ipv4_addresses() or ["localhost"])[0], self.config.http_port)
         log.info("content folder: %s (%d videos)", self.library.root.resolve(), len(self.library.videos))
@@ -126,6 +127,7 @@ class SyncServer:
         try:
             for task in self._tasks:
                 task.cancel()
+            await self.controller.watchdogs.stop()
             self.analyzer.on_update = None
             if self.beacon:
                 await self.beacon.stop()

@@ -13,6 +13,7 @@ _WAKEFULNESS = re.compile(r"mWakefulness=(\w+)")
 _DISPLAY_STATE = (re.compile(r"Display State=(\w+)"), re.compile(r"mScreenState=(\w+)"),
                   re.compile(r"\bstate (ON|OFF|DOZE\w*|UNKNOWN|VR|ON_SUSPEND)\b"))
 _FOCUS = re.compile(r"mCurrentFocus=Window\{\S+ \S+ ([^\s}]+)")
+_FOCUS_TITLE = re.compile(r"mCurrentFocus=Window\{\S+ \S+ ([^}]*)\}")
 _FOCUSED_APP = re.compile(r"mFocusedApp=\S*ActivityRecord\{\S+ \S+ ([^\s}]+)")
 _THERMAL = re.compile(r"Thermal Status:\s*(-?\d+)")
 _TEMP = re.compile(r"^\s*temperature:\s*(-?\d+)\s*$", re.MULTILINE)
@@ -42,6 +43,12 @@ def focused_window(text) -> Optional[str]:
     """Component of ``mCurrentFocus`` (``pkg/Activity``) from ``dumpsys window windows``; None when no focus."""
     match = _FOCUS.search(_text(text))
     return match.group(1) if match else None
+
+
+def focus_title(text) -> Optional[str]:
+    """Whole title of ``mCurrentFocus`` (``pkg/Activity``, or ``Application Error: pkg`` for a dialog)."""
+    match = _FOCUS_TITLE.search(_text(text))
+    return match.group(1).strip() or None if match else None
 
 
 def focused_app(text) -> Optional[str]:

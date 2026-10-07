@@ -1,0 +1,5 @@
+WINDOW MANAGER WINDOWS (dumpsys window windows)
+  Window #0 Window{1a2b3c u0 com.oculus.vrshell/com.oculus.vrshell.MainActivity}:
+
+  mCurrentFocus=Window{1a2b3c u0 com.oculus.vrshell/com.oculus.vrshell.MainActivity}
+  mFocusedApp=ActivityRecord{5c5c5c u0 com.oculus.vrshell/.MainActivity t3}

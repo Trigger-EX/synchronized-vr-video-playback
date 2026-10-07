@@ -117,6 +117,14 @@ class Bridge(QObject):
     def set_feature_tested(self, key: str, tested: bool) -> None:
         self._run("set_feature_tested", lambda c: c.set_feature_tested(key, tested))
 
+    def set_watchdog(self, name: str, **body) -> None:
+        """POST /api/watchdogs/{name} equivalent: ``enabled``, ``armed``, ``cfg``, ``testing``."""
+        self._run("watchdog", lambda c: c.set_watchdog(name, body) and None)
+
+    def watchdog_test_pattern(self, name: str, **body) -> None:
+        """Test (or with ``confirm=True`` confirm) a watchdog pattern against a snapshot folder."""
+        self._run("watchdog_pattern", lambda c: c.watchdog_test_pattern(name, body))
+
     def set_show_mode(self, enabled: bool) -> None:
         self._run("set_show_mode", lambda c: c.set_show_mode(enabled))
 

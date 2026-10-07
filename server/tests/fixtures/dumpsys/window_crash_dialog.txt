@@ -1,0 +1,3 @@
+WINDOW MANAGER WINDOWS (dumpsys window windows)
+  mCurrentFocus=Window{1a1a1a u0 Application Error: com.syncvr.player}
+  mFocusedApp=ActivityRecord{7a8b9c u0 com.syncvr.player/.MainActivity t42}

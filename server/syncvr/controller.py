@@ -22,7 +22,7 @@ from typing import Any, Callable, Dict, Iterable, List, Optional
 
 from pathlib import Path
 
-from . import __version__, automation, features
+from . import __version__, automation, features, watchdogs
 from .fleetops import MIN_ASLEEP_S, AdbFleet
 from .library import Library, Video
 from .protocol import DEFAULT_SYNC_SETTINGS, server_clock, validate_settings
@@ -258,6 +258,7 @@ class Controller:
         self._job_failed_cbs: Dict[str, Callable[[str], None]] = {}
         # headsets an operator put to sleep on purpose; stay-awake style watchdogs must leave them alone
         self.intentionally_asleep: set = set()
+        self.watchdogs = watchdogs.Watchdogs(self)
         self.gated_actions["poweroff"] = "power.poweroff"
         self.confirm_actions.update(POWER_ACTIONS)
         self.adb_actions = set(ADB_ACTIONS)
@@ -309,6 +310,7 @@ class Controller:
         saved_features = data.get("tested_features", [])
         self.tested_features = features.normalize(saved_features if isinstance(saved_features, list) else [])
         self.show_mode = data.get("show_mode") is True
+        self.watchdogs.load(data.get("watchdogs"))  # enabled + cfg only; never armed
         if "max_downloads" in data:
             self.distributor.max_concurrent = max(0, int(data["max_downloads"]))
         for device_id, job in data.get("downloads", {}).items():
@@ -334,6 +336,7 @@ class Controller:
             "downloads": self.distributor.pending_json(),
             "tested_features": sorted(self.tested_features),
             "show_mode": self.show_mode,
+            "watchdogs": self.watchdogs.dump(),
         }
 
     def add_listener(self, fn: Callable[[], None]) -> None:
@@ -367,6 +370,7 @@ class Controller:
             "jobs": [dict(j, results=list(j["results"])) for j in self.jobs.values()],
             "asleep": sorted(i for i in self.intentionally_asleep if i in self.devices),
             "brake": self.brake_json(),
+            "watchdogs": self.watchdogs.to_json(),
         }
 
     # ----------------------------------------------------------------- brakes
@@ -386,6 +390,55 @@ class Controller:
             self.show_mode = enabled
             self.log_event("info", "Show Mode on: automation paused" if enabled else "Show Mode off")
         self.changed(persist=True)
+
+    # -------------------------------------------------------------- watchdogs
+
+    def set_watchdog(self, name: str, body: dict, tested_pattern: bool = False) -> dict:
+        try:
+            result = self.watchdogs.set(name, body, tested_pattern=tested_pattern)
+        except watchdogs.WatchdogError as exc:
+            raise CommandError(str(exc))
+        self.changed(persist=True)
+        return result
+
+    def _snapshot_folder(self, folder) -> Path:
+        """A diagnostic snapshot folder, which must live inside <data_dir>/snapshots."""
+        if not self.data_dir:
+            raise CommandError("no data directory is configured")
+        if not isinstance(folder, str) or not folder:
+            raise CommandError("folder must be the path of a snapshot folder")
+        root = (Path(self.data_dir) / "snapshots").resolve()
+        path = Path(folder)
+        path = (path if path.is_absolute() else root / path).resolve()
+        if path != root and root not in path.parents:
+            raise CommandError(f"the folder must be inside {root}")
+        return path
+
+    def watchdog_test_pattern(self, name: str, body: dict) -> dict:
+        """Test the overheat pattern against a snapshot folder; with ``confirm: true`` also confirm it.
+
+        Confirming needs a valid pattern with at least one match, and sets ``pattern_confirmed`` to its hash.
+        """
+        if name != "overheat":
+            raise CommandError(f"{name} has no pattern to test")
+        if not isinstance(body, dict):
+            raise CommandError("request body must be a JSON object")
+        st = self.watchdogs.states["overheat"]
+        pattern = body.get("pattern", st.cfg.get("pattern", ""))
+        if not isinstance(pattern, str):
+            raise CommandError("pattern must be text")
+        result = self.watchdogs.confirm_pattern(pattern, self._snapshot_folder(body.get("folder")))
+        result["confirmed"] = False
+        if body.get("confirm") is True:
+            if result["error"]:
+                raise CommandError(f"cannot confirm: {result['error']}")
+            if not result["total"]:
+                raise CommandError("cannot confirm: the pattern matches nothing in that snapshot")
+            self.set_watchdog("overheat", {"cfg": {"pattern": pattern, "pattern_confirmed": result["hash"]}},
+                              tested_pattern=True)
+            result["confirmed"] = True
+            self.log_event("info", f"overheat pattern confirmed ({result['total']} matches in the snapshot)")
+        return result
 
     # ------------------------------------------------------------------- jobs
 

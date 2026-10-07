@@ -231,7 +231,7 @@ Actions that act through adb (rather than the headset connection) are checked by
 
 ### Show Mode and brakes
 
-Brakes tell automation (watchdogs, none exist yet) not to send anything. They never block manual commands.
+Brakes tell automation (the watchdogs below) not to send anything. They never block manual commands.
 `GET /api/state` has `"brake": {"active": bool, "reason": str|null, "show_mode": bool}`. The first matching reason wins:
 
 | `reason` | Meaning |
@@ -242,3 +242,49 @@ Brakes tell automation (watchdogs, none exist yet) not to send anything. They ne
 
 While Show Mode is on, the preview (`warnings`, plus `"show_mode": true`) says "Show Mode is on: automation is paused,
 but this command will still run.", and the GUI confirmation dialog shows it.
+
+### Watchdogs
+
+Five unattended checks, implemented in `server/syncvr/watchdogs.py`: `stay_awake`, `popup`, `overheat`,
+`black_screen`, `keepalive`. Each runs as its own asyncio task, started by `SyncServer.start()` and cancelled on stop.
+
+**Cycle.** Every `cfg.interval_s` (when enabled): list `adb devices` once, then for every headset NOT in the
+intentionally-asleep set, observe (adb on the shared executor, filtered on the headset with `grep`, or player
+telemetry where that already has the answer), call the pure `decide(history, obs, cfg)`, and carry out the returned
+actions. Immediately before EACH send `Controller.brake()` is checked again (and once more after waiting for a poll
+slot). When braked the decision is logged ("would wake ... braked: show_mode, not sent") and nothing is sent. A
+watchdog that is enabled but not armed is observe-only: it logs the same way. Every cycle and every headset catches and
+logs its own errors, so a bad cycle never ends the loop. At most 4 adb observations or sends run at once across all
+watchdogs.
+
+**State.** `GET /api/state` has `"watchdogs": [...]`, one object per watchdog: `name`, `title`, `feature`, `rule` (the
+exact text quoted in the GUI arm dialog), `enabled`, `armed`, `mode` (`off` | `observe` | `armed`), `tested`,
+`arm_blocker` (why it cannot be armed, or null), `cfg`, `pattern_hash`, `last_cycle` (wall clock), `last_summary`,
+`counters` and the last 10 `decisions` (`t`, `device`, `label`, `text`, `sent`, `suppressed`, `verified`, `error`).
+`enabled` and `cfg` persist in `state.json` under `watchdogs`; **`armed` never does**, so every restart is observe-only.
+
+**`POST /api/watchdogs/{name}`** with `{"enabled": bool, "armed": bool, "cfg": {...}, "testing": bool}` (all optional).
+Returns `{"ok": true, "watchdog": {...}}`; 400 with `{"error"}` for an unknown name, a wrong type, an unknown or invalid
+`cfg` key, or a refused arming. Arming is refused unless the watchdog's feature (`watchdog.<name>`) is marked tested or
+the request has `"testing": true`, and when its `arm_blocker` is set. Disabling also disarms. Changing the overheat
+pattern disarms it.
+
+| Watchdog | Sends | Only when |
+|---|---|---|
+| `stay_awake` (15 s) | WAKE (keyevent 224) | wakefulness is Asleep, Dozing or Dreaming and the headset is not intentionally asleep. A worn headset (telemetry) is not polled |
+| `popup` (10 s) | BACK (4), verified after 1.5 s, at most 3 failed tries per dialog | `mCurrentFocus` title matches `Application Error` or `Application Not Responding` and `cfg.evidence` (default: the player package) matches the focus line. If the player is disconnected and the app is not in front for 2 samples: launch (60 s cooldown) |
+| `overheat` (15 s) | BACK (4), 60 s cooldown | `cfg.pattern` matches a logcat line written since the last cycle (`logcat -T`) AND a line of the window list, player lines excluded from both. No built-in pattern |
+| `black_screen` (30 s) | WAKE, or a screen refresh (`cfg.recovery`), 120 s cooldown | display OFF, player in front, Awake, not intentionally asleep and desired mode playing, for `cfg.samples` (3) samples in a row. Display ON while playing is only appended to `<data_dir>/probe/probe_YYYYMMDD.csv` (`picture` is `unsampled`; adb cannot see pixels) |
+| `keepalive` (30 s) | `adb connect <ip>:5555`, then WAKE | a headset with a remembered `ip` is missing from `adb devices` (retry every 30 s). A connect that does not print `connected to` fails and skips the wake. Blocked by brakes like the rest |
+
+**Overheat pattern.** `POST /api/watchdogs/overheat/test_pattern` with `{"folder": <snapshot folder>, "pattern": str,
+"confirm": bool}` runs the pattern over that folder's `logcat.txt` and `window.txt` (player lines dropped) and returns
+`{"pattern", "hash", "error", "files", "matches": [{"file", "line_no", "line"}], "total", "confirmed"}`. The folder must
+be inside `<data_dir>/snapshots` (a relative path is taken from there). With `"confirm": true` it is refused for an
+invalid pattern or zero matches; otherwise it stores `pattern` and `pattern_confirmed` (the first 16 hex digits of the
+SHA-256 of the pattern). Arming needs `pattern_confirmed` to equal the hash of the current pattern, and
+`pattern_confirmed` cannot be set through the plain endpoint.
+
+The operator GUI shows these in the Tools tab's WATCHDOGS card: an Observe/Armed pill, an enable toggle, an Arm
+button that opens a dialog quoting `rule`, the last cycle and last decision, and for overheat the pattern box and
+"Test pattern against snapshot...".

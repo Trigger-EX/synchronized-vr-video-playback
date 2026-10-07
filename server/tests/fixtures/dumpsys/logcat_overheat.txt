@@ -1,0 +1,4 @@
+10-07 12:00:00.100  1234  1234 I SyncVR  : overheat check: temp ok
+10-07 12:00:01.200   999   999 W ThermalMgr: device temperature critical, showing OverheatPrompt
+10-07 12:00:02.300  1234  1250 I SyncVR  : saw OverheatPrompt in logcat
+10-07 12:00:03.400   999   999 I ActivityManager: Displayed com.oculus.systemux/OverheatPrompt

@@ -6,6 +6,8 @@
 #   FAKE_ADB_STUCK    serials whose screen ignores keyevents 223/224
 #   FAKE_ADB_FAIL_CMD space-separated substrings; a command whose argv contains one exits 1 (partial failure)
 #   FAKE_ADB_SLEEP_CMD substring of a command that sleeps $FAKE_ADB_SLEEP_CMD_S seconds (per-command timeout)
+#   FAKE_ADB_WINDOW   window fixture stem (default window); FAKE_ADB_LOGCAT file for `logcat -d -T`
+#   FAKE_ADB_CONNECT_FAIL addresses whose `adb connect` prints failed (exit 0, like real adb)
 #   FAKE_ADB_SLEEP    seconds every non-`devices` command takes (to exercise timeouts)
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 [ -n "$FAKE_ADB_LOG" ] && printf '%s\n' "$*" >> "$FAKE_ADB_LOG"
@@ -14,6 +16,10 @@ if [ "$1" = "-s" ]; then serial="$2"; shift 2; fi
 if [ "$1" = "devices" ]; then
   cat "${FAKE_ADB_DEVICES:-$here/../fixtures/adb_devices.txt}"
   exit 0
+fi
+if [ "$1" = "connect" ]; then
+  case " $FAKE_ADB_CONNECT_FAIL " in *" $2 "*) echo "failed to connect to '$2'"; exit 0;; esac
+  echo "connected to $2"; exit 0
 fi
 [ -n "$FAKE_ADB_SLEEP" ] && sleep "$FAKE_ADB_SLEEP"
 # Wakefulness: per-serial file in $FAKE_ADB_STATE (a directory) holding Awake or Asleep; default
@@ -34,7 +40,7 @@ fx="$here/../fixtures/dumpsys"
 if [ "$1" = "exec-out" ] && [ "$2" = "screencap" ]; then cat "$fx/screencap.png"; exit 0; fi
 if [ "$1" = "shell" ]; then
   case "$2" in
-    "dumpsys display"*) cat "$fx/display.txt"; exit 0;;
+    "dumpsys display"*) cat "$fx/${FAKE_ADB_DISPLAY:-display}.txt"; exit 0;;
     "dumpsys window windows"*) cat "$fx/${FAKE_ADB_WINDOW:-window}.txt"; exit 0;;
     "dumpsys activity activities"*) cat "$fx/activities.txt"; exit 0;;
     "dumpsys audio"*) cat "$fx/audio.txt"; exit 0;;
@@ -42,6 +48,7 @@ if [ "$1" = "shell" ]; then
     "dumpsys SurfaceFlinger"*) cat "$fx/surfaceflinger.txt"; exit 0;;
     "dumpsys thermalservice"*) cat "$fx/thermal.txt"; exit 0;;
     "dumpsys battery"*) cat "$fx/battery.txt"; exit 0;;
+    "logcat -d -T"*) cat "${FAKE_ADB_LOGCAT:-$fx/logcat.txt}"; exit 0;;
     "logcat -d -t 2000"*) cat "$fx/logcat.txt"; exit 0;;
     "getprop"*) cat "$fx/getprop.txt"; exit 0;;
     "dumpsys power"*)
@@ -54,6 +61,10 @@ if [ "$1" = "shell" ]; then
         if [ "$2" = "input keyevent 223" ]; then echo Asleep > "$state_file"; else echo Awake > "$state_file"; fi
       fi
       exit 0;;
+    "("*)  # a compound command (pipes, grep -v): run it for real over the fixtures
+      logcat() { cat "${FAKE_ADB_LOGCAT:-$fx/logcat.txt}"; }
+      dumpsys() { cat "$fx/${FAKE_ADB_WINDOW:-window}.txt"; }
+      eval "$2"; exit $?;;
   esac
 fi
 echo "fake ok ${serial}: $*"
