@@ -48,6 +48,7 @@ class WebApp:
         r.add_post("/api/command/preview", self.post_preview)
         r.add_post("/api/features/{key}", self.post_feature)
         r.add_delete("/api/features/{key}", self.delete_feature)
+        r.add_post("/api/show_mode", self.post_show_mode)
         r.add_get("/api/settings", self.get_settings)
         r.add_post("/api/settings", self.post_settings)
         r.add_post("/api/library/rescan", self.post_rescan)
@@ -107,6 +108,13 @@ class WebApp:
         except CommandError as exc:
             return _json_error(400, str(exc))
         return web.json_response({"ok": True, "key": request.match_info["key"], "tested": False})
+
+    async def post_show_mode(self, request):
+        try:
+            self.controller.set_show_mode((await self._body(request)).get("enabled"))
+        except CommandError as exc:
+            return _json_error(400, str(exc))
+        return web.json_response({"ok": True, "brake": self.controller.brake_json()})
 
     async def get_settings(self, request):
         return web.json_response(self.controller.settings)

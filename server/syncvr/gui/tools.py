@@ -6,6 +6,7 @@ from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (QCheckBox, QDialog, QDialogButtonBox, QGridLayout, QGroupBox, QHBoxLayout, QLabel,
                                QListWidget, QListWidgetItem, QPushButton, QScrollArea, QVBoxLayout, QWidget)
 
+from ..automation import SHOW_MODE_WARNING
 from . import format as fmt
 from .theme import mark
 
@@ -24,11 +25,16 @@ class ConfirmDialog(QDialog):
         self.scope_label = QLabel(preview.get("scope_text", ""))
         self.scope_label.setObjectName("target")
         self.scope_label.setWordWrap(True)
-        self.warning_label = QLabel("<br>".join(escape(w) for w in preview.get("warnings") or []))
+        self.show_label = QLabel(escape(SHOW_MODE_WARNING))
+        self.show_label.setObjectName("error")
+        self.show_label.setWordWrap(True)
+        self.show_label.setVisible(bool(preview.get("show_mode")))
+        others = [w for w in preview.get("warnings") or [] if w != SHOW_MODE_WARNING]  # shown above instead
+        self.warning_label = QLabel("<br>".join(escape(w) for w in others))
         self.warning_label.setTextFormat(Qt.RichText)
         self.warning_label.setWordWrap(True)
         self.warning_label.setObjectName("error")
-        self.warning_label.setVisible(bool(preview.get("warnings")))
+        self.warning_label.setVisible(bool(others))
         self.every_check = QCheckBox("I understand this affects EVERY headset")
         self.every_check.setVisible(bool(preview.get("every")) and bool(preview.get("destructive")))
         self.buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
@@ -38,7 +44,7 @@ class ConfirmDialog(QDialog):
         self.buttons.rejected.connect(self.reject)
         self.every_check.toggled.connect(lambda _c: self._sync())
         lay = QVBoxLayout(self)
-        for w in (self.scope_label, self.warning_label, self.every_check, self.buttons):
+        for w in (self.scope_label, self.show_label, self.warning_label, self.every_check, self.buttons):
             lay.addWidget(w)
         self._sync()
 

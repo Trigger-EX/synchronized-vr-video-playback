@@ -39,6 +39,9 @@ QLabel#stats { color: %(muted)s; }
 QLabel#conn { border-radius: 10px; padding: 3px 12px; font-size: 9pt; }
 QLabel#conn[ok="true"] { background: %(ok_bg)s; color: %(ok)s; }
 QLabel#conn[ok="false"] { background: %(bad_bg)s; color: %(bad)s; }
+QLabel#brake { border-radius: 10px; padding: 3px 12px; font-size: 9pt; }
+QLabel#brake[active="true"] { background: %(warn_bg)s; color: %(warn)s; }
+QLabel#brake[active="false"] { background: %(surface2)s; color: %(muted)s; }
 
 QMenuBar { background: %(surface)s; border-bottom: 1px solid %(border)s; }
 QMenuBar::item { padding: 5px 10px; background: transparent; }

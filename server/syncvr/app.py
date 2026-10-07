@@ -56,6 +56,7 @@ class SyncServer:
                         "(install ffmpeg to enable). Checksums still work.")
         self.library = Library(Path(config.content_dir), analyzer=self.analyzer)
         self.controller = Controller(self.library, server_name=config.name)
+        self.controller.data_dir = Path(config.data_dir)
         saved = self.store.load()
         rebase_clock(saved.get("clock") if isinstance(saved, dict) else None)
         self.controller.load(saved)

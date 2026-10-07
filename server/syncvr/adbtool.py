@@ -23,6 +23,8 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import List
 
+from . import automation, paths
+
 DEFAULT_PACKAGE = "com.syncvr.player"
 USB_PORTS = (8765, 8080)  # TCP control, HTTP content
 VRSHELL = "com.oculus.vrshell"  # the Oculus home environment that kiosk mode replaces
@@ -192,7 +194,9 @@ def run(args) -> int:
             for f in args.files:
                 adb.run(s, "push", f, f"{adb.videos_dir}/{Path(f).name}", timeout=None)
             return f"{len(args.files)} file(s) pushed"
-        return for_each(serials, push, workers=args.parallel)
+        # While this runs the server's automation (watchdogs) is braked; the lock is removed on any exit.
+        with automation.push_lock(Path(args.data) if getattr(args, "data", None) else paths.data_dir()):
+            return for_each(serials, push, workers=args.parallel)
     if cmd == "list":
         return for_each(serials, lambda s: adb.shell(s, f"ls -l {adb.videos_dir}", check=False))
     if cmd == "launch":
@@ -358,6 +362,8 @@ USB_HELP = "reach the server over adb reverse (127.0.0.1; ports 8765, 8080), no 
 def add_arguments(p: argparse.ArgumentParser) -> None:
     p.add_argument("--adb", default=os.environ.get("ADB", "adb"), help="path to adb")
     p.add_argument("--package", default=DEFAULT_PACKAGE, help="headset app package name")
+    p.add_argument("--data", default=None, metavar="DIR",
+                   help="server data folder, where `push` leaves its lock file (default: the launcher's)")
     p.add_argument("-s", "--serial", action="append", help="only this headset (repeatable); default: all")
     sub = p.add_subparsers(dest="adb_command", required=True)
     sub.add_parser("devices", help="list connected headsets with battery and temperature")

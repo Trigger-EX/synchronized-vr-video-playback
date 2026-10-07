@@ -117,6 +117,9 @@ class Bridge(QObject):
     def set_feature_tested(self, key: str, tested: bool) -> None:
         self._run("set_feature_tested", lambda c: c.set_feature_tested(key, tested))
 
+    def set_show_mode(self, enabled: bool) -> None:
+        self._run("set_show_mode", lambda c: c.set_show_mode(enabled))
+
     def update_device(self, device_id: str, changes: dict) -> None:
         self._run("update_device", lambda c: c.update_device(device_id, changes) and None)
 

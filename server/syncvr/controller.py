@@ -20,7 +20,9 @@ from collections import Counter, OrderedDict, defaultdict, deque
 from dataclasses import dataclass, field
 from typing import Any, Callable, Dict, Iterable, List, Optional
 
-from . import __version__, features
+from pathlib import Path
+
+from . import __version__, automation, features
 from .fleetops import MIN_ASLEEP_S, AdbFleet
 from .library import Library, Video
 from .protocol import DEFAULT_SYNC_SETTINGS, server_clock, validate_settings
@@ -244,6 +246,8 @@ class Controller:
         self.library = library
         self.fleet = fleet or AdbFleet()
         self.tested_features: set = set()
+        self.show_mode = False  # manual only; persisted; brakes automation (see automation.py)
+        self.data_dir: Optional[Path] = None  # where the CLI push lock lives; set by the app
         # adb actions (see start_job): action -> feature that must be tested, and the actions that need
         # a confirmation token from preview(). Filled in by the action implementations.
         self.gated_actions: Dict[str, str] = {}
@@ -301,6 +305,7 @@ class Controller:
         self.library.metadata.update(data.get("videos", {}))
         saved_features = data.get("tested_features", [])
         self.tested_features = features.normalize(saved_features if isinstance(saved_features, list) else [])
+        self.show_mode = data.get("show_mode") is True
         if "max_downloads" in data:
             self.distributor.max_concurrent = max(0, int(data["max_downloads"]))
         for device_id, job in data.get("downloads", {}).items():
@@ -325,6 +330,7 @@ class Controller:
             "videos": self.library.metadata,
             "downloads": self.distributor.pending_json(),
             "tested_features": sorted(self.tested_features),
+            "show_mode": self.show_mode,
         }
 
     def add_listener(self, fn: Callable[[], None]) -> None:
@@ -357,7 +363,26 @@ class Controller:
             "features": features.describe(self.tested_features),
             "jobs": [dict(j, results=list(j["results"])) for j in self.jobs.values()],
             "asleep": sorted(i for i in self.intentionally_asleep if i in self.devices),
+            "brake": self.brake_json(),
         }
+
+    # ----------------------------------------------------------------- brakes
+
+    def brake(self) -> Optional[str]:
+        """Why automation must not act right now, or None. Manual commands ignore this."""
+        return automation.brake_reason(self.show_mode, bool(self.distributor.active), self.data_dir)
+
+    def brake_json(self) -> dict:
+        reason = self.brake()
+        return {"active": reason is not None, "reason": reason, "show_mode": self.show_mode}
+
+    def set_show_mode(self, enabled) -> None:
+        if not isinstance(enabled, bool):
+            raise CommandError("enabled must be true or false")
+        if enabled != self.show_mode:
+            self.show_mode = enabled
+            self.log_event("info", "Show Mode on: automation paused" if enabled else "Show Mode off")
+        self.changed(persist=True)
 
     # ------------------------------------------------------------------- jobs
 
@@ -480,11 +505,13 @@ class Controller:
         down = [d.label for d, serial in pairs if serial is None]
         if down:
             warnings.append(f"{len(down)} not reachable by adb: {', '.join(down[:PREVIEW_NAMES_SHOWN])}")
+        if self.show_mode:
+            warnings.append(automation.SHOW_MODE_WARNING)
         extra = self.preview_warnings.get(action)
         if extra is not None:
             warnings.extend(extra(targets, params))
         return {"scope_text": scope, "labels": labels, "warnings": warnings,
-                "every": len(targets) == len(self.devices),
+                "every": len(targets) == len(self.devices), "show_mode": self.show_mode,
                 "token": self._token(action, pairs, self._dry_run(params)),
                 "needs_confirm": action in self.confirm_actions}
 

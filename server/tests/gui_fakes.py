@@ -53,6 +53,9 @@ class FakeBridge(QObject):
         self.calls.append(("pose", device_id))
         cb(self.next_pose)
 
+    def set_show_mode(self, enabled):
+        self.calls.append(("set_show_mode", enabled))
+
     def rescan(self):
         self.calls.append(("rescan",))
 

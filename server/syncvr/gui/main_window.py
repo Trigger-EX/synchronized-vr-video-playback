@@ -5,7 +5,7 @@ from pathlib import Path
 
 from PySide6.QtCore import Qt, QTimer
 from PySide6.QtGui import QAction, QGuiApplication
-from PySide6.QtWidgets import (QFileDialog, QFrame, QHBoxLayout, QLabel, QMainWindow, QMessageBox, QScrollArea, QSizePolicy, QTabWidget,
+from PySide6.QtWidgets import (QCheckBox, QFileDialog, QFrame, QHBoxLayout, QLabel, QMainWindow, QMessageBox, QScrollArea, QSizePolicy, QTabWidget,
                                QVBoxLayout, QWidget)
 
 from ..launcher import load_overrides, open_path, save_override
@@ -77,6 +77,12 @@ class MainWindow(QMainWindow):
         self.conn_label = QLabel("connecting…")
         self.conn_label.setObjectName("conn")
         set_property(self.conn_label, "ok", False)
+        self.show_mode_check = QCheckBox("Show Mode")
+        self.show_mode_check.setToolTip("Pause automation (watchdogs) during a show. Manual commands still run.")
+        self.show_mode_check.clicked.connect(lambda on: self.bridge.set_show_mode(bool(on)))
+        self.brake_label = QLabel("Automation free")
+        self.brake_label.setObjectName("brake")
+        set_property(self.brake_label, "active", False)
         header = QFrame()
         header.setObjectName("topbar")
         head = QHBoxLayout(header)
@@ -87,6 +93,8 @@ class MainWindow(QMainWindow):
         for w in (brand, self.server_label):
             head.addWidget(w)
         head.addWidget(self.stats_label, 1)
+        head.addWidget(self.show_mode_check)
+        head.addWidget(self.brake_label)
         head.addWidget(self.conn_label)
         body = QWidget()
         lay = QVBoxLayout(body)
@@ -280,6 +288,7 @@ class MainWindow(QMainWindow):
         self.server_label.setText((snap.get("server") or {}).get("name") or "")
         self.conn_label.setText("live")
         set_property(self.conn_label, "ok", True)
+        self.update_brake(snap.get("brake") or {})
         dl = snap.get("downloads") or {}
         active, queued = len(dl.get("active") or []), len(dl.get("queued") or [])
         self.downloads_label.setText("Downloading to %d, %d waiting" % (active, queued) if active or queued else "")
@@ -287,6 +296,14 @@ class MainWindow(QMainWindow):
         addrs = server.get("addresses") or []
         self.address_label.setText("Operator app address: %s:%s" % (addrs[0], server.get("http_port"))
                                    if addrs else "")
+
+    def update_brake(self, brake: dict) -> None:
+        active = bool(brake.get("active"))
+        reason = brake.get("reason") or ""
+        self.show_mode_check.setChecked(bool(brake.get("show_mode")))  # setChecked does not emit clicked
+        self.brake_label.setText("Automation paused: %s" % ("Show Mode" if reason == "show_mode" else reason)
+                                 if active else "Automation free")
+        set_property(self.brake_label, "active", active)
 
     def on_result(self, action: str, result) -> None:
         if result.get("warning"):

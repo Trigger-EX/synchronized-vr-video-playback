@@ -158,7 +158,8 @@ SyncVR with plain HTTP calls. With `--password`, send HTTP basic auth (any user 
 | `POST /api/library/<file>` | `{"title", "projection", "stereo", "rotation", "loop"}` (any subset; `projection`/`stereo` also accept `"auto"` to drop the stored choice and re-detect) |
 | `POST /api/devices/<id>` | `{"name", "group"}` |
 | `DELETE /api/devices/<id>` | forget an offline headset |
-| `POST /api/command/preview` | same body as a command (`action`, `targets`, optional `dry_run`, default true) → `{"scope_text", "labels", "warnings", "every", "token", "needs_confirm"}`; nothing is sent to any headset |
+| `POST /api/command/preview` | same body as a command (`action`, `targets`, optional `dry_run`, default true) → `{"scope_text", "labels", "warnings", "every", "show_mode", "token", "needs_confirm"}`; nothing is sent to any headset |
+| `POST /api/show_mode` | `{"enabled": true\|false}` → `{"ok": true, "brake": {...}}`; anything but a boolean is a 400. See "Show Mode and brakes" |
 | `POST /api/features/<key>` | mark a feature as tested → `{"ok": true, "key", "tested": true}`; unknown key is a 400 |
 | `DELETE /api/features/<key>` | mark it untested again |
 | `GET /content/<file>` | the video file (supports Range); `X-Content-SHA256` header once the checksum is known |
@@ -225,3 +226,17 @@ Actions that act through adb (rather than the headset connection) are checked by
   `wake` and `screen_refresh` clear them. `GET /api/state` exposes it as `asleep` (headset ids) so watchdogs can
   skip those headsets. It is not persisted.
 - Saved headsets now also keep their last `ip` (used to reach them with `adb -s <ip>:5555`).
+
+### Show Mode and brakes
+
+Brakes tell automation (watchdogs, none exist yet) not to send anything. They never block manual commands.
+`GET /api/state` has `"brake": {"active": bool, "reason": str|null, "show_mode": bool}`. The first matching reason wins:
+
+| `reason` | Meaning |
+|---|---|
+| `show_mode` | Show Mode is on. Set by an operator with `POST /api/show_mode {"enabled": bool}` or the topbar toggle; never switched on by playback. Persisted in `state.json` as `show_mode` |
+| `sync in progress` | the server has active content download jobs (queued-only jobs do not count) |
+| `push in progress` | a CLI `syncvr adb push` is running: it writes its PID to `push.lock` in the data folder (`--data DIR`, default the launcher's data folder) and removes the file on exit, including on errors. The lock counts only while that PID is alive; a missing, unreadable or dead-PID file never brakes |
+
+While Show Mode is on, the preview (`warnings`, plus `"show_mode": true`) says "Show Mode is on: automation is paused,
+but this command will still run.", and the GUI confirmation dialog shows it.
